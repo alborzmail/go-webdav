@@ -75,6 +75,10 @@ func (b *testBackend) CreateAddressBook(ctx context.Context, ab *AddressBook) er
 	return nil
 }
 
+func (*testBackend) UpdateAddressBook(ctx context.Context, path string, update *AddressBookUpdate) error {
+	panic("TODO: implement")
+}
+
 func (*testBackend) DeleteAddressBook(ctx context.Context, path string) error {
 	panic("TODO: implement")
 }
