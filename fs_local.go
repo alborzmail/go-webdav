@@ -131,20 +131,20 @@ func checkConditionalMatches(fi *FileInfo, ifMatch, ifNoneMatch ConditionalMatch
 		etag = fi.ETag
 	}
 
-	if ifMatch.IsSet() {
-		if ok, err := ifMatch.MatchETag(etag); err != nil {
-			return NewHTTPError(http.StatusBadRequest, err)
-		} else if !ok {
-			return NewHTTPError(http.StatusPreconditionFailed, fmt.Errorf("If-Match condition failed"))
-		}
+	if isSet, ok, err := ifMatch.MatchETag(etag); !isSet {
+		// not set so continue
+	} else if err != nil {
+		return NewHTTPError(http.StatusBadRequest, err)
+	} else if isSet && !ok {
+		return NewHTTPError(http.StatusPreconditionFailed, fmt.Errorf("If-Match condition failed"))
 	}
 
-	if ifNoneMatch.IsSet() {
-		if ok, err := ifNoneMatch.MatchETag(etag); err != nil {
-			return NewHTTPError(http.StatusBadRequest, err)
-		} else if ok {
-			return NewHTTPError(http.StatusPreconditionFailed, fmt.Errorf("If-None-Match condition failed"))
-		}
+	if isSet, ok, err := ifNoneMatch.MatchETag(etag); !isSet {
+		// not set so continue
+	} else if err != nil {
+		return NewHTTPError(http.StatusBadRequest, err)
+	} else if isSet && ok {
+		return NewHTTPError(http.StatusPreconditionFailed, fmt.Errorf("If-None-Match condition failed"))
 	}
 
 	return nil

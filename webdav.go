@@ -4,6 +4,7 @@
 package webdav
 
 import (
+	"strings"
 	"time"
 
 	"github.com/emersion/go-webdav/internal"
@@ -59,13 +60,38 @@ func (val ConditionalMatch) ETag() (string, error) {
 	return string(e), nil
 }
 
-func (val ConditionalMatch) MatchETag(etag string) (bool, error) {
-	if etag == "" {
-		return false, nil
+// MatchETag checks if the ETag provided matches any of the ETags in the ConditionalMatch header value.
+//
+// Parameters:
+//   - etag: The ETag to match against.
+//
+// Returns:
+//   - isSet: Indicates if the ConditionalMatch has any ETags set, or is wildcard.
+//   - match: True if the etag matches any of the ETags in ConditionalMatch, false otherwise.
+//   - err: An error if there was a problem parsing one of the ETags.
+//     If an error occurs during parsing, match will be set to false, but isSet will be true.
+//     Callers should check for a non-nil error to ensure the match result is valid.
+//
+// The function returns early if no ETags are set (isSet is false) or if a wildcard (*) is used,
+// in which case all ETags match. For multiple ETags, it checks each one until a match is found or all are checked.
+func (val ConditionalMatch) MatchETag(etag string) (isSet bool, match bool, err error) {
+	if !val.IsSet() {
+		return false, false, nil
+	} else if etag == "" {
+		return true, false, nil
+	} else if val.IsWildcard() {
+		return true, true, nil
 	}
-	if val.IsWildcard() {
-		return true, nil
+	quoted_etags := strings.Split(string(val), ",")
+	for _, quoted_etag := range quoted_etags {
+		var e internal.ETag
+		if err := e.UnmarshalText([]byte(strings.TrimSpace(quoted_etag))); err != nil {
+			// opinionated returning `false` on match so caller
+			// should definitely check for non-nil `err`
+			return true, false, err
+		} else if string(e) == etag {
+			return true, true, nil
+		}
 	}
-	t, err := val.ETag()
-	return t == etag, err
+	return true, false, nil
 }
