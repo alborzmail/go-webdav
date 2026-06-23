@@ -650,6 +650,9 @@ func (b *backend) propFindCalendar(ctx context.Context, propfind *internal.PropF
 				Size: cal.MaxResourceSize,
 			})
 		}
+		if cal.CTag != "" {
+			props[internal.GetCTagName] = internal.PropFindValue(&internal.GetCTag{CTag: cal.CTag})
+		}
 	}
 
 	if cal.Name != "" {

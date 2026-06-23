@@ -31,6 +31,9 @@ type AddressBook struct {
 	// ReadOnly reports that the current user may only read this address book.
 	// It controls the DAV:current-user-privilege-set reported by the server.
 	ReadOnly bool
+	// CTag, when set, is reported as the CalendarServer getctag property: an
+	// opaque token that must change whenever the address book's contents change.
+	CTag string
 }
 
 type AddressBookUpdate struct {
