@@ -1315,6 +1315,33 @@ func TestEncodeCompFilterIsNotDefined(t *testing.T) {
 	}
 }
 
+func TestPropFindSupportedReportSet(t *testing.T) {
+	handler := Handler{Backend: &testBackend{calendars: []Calendar{{Path: "/user/calendars/default/"}}}}
+	serve := func(body string) string {
+		req := httptest.NewRequest("PROPFIND", "/user/calendars/default/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Depth", "0")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		data, err := io.ReadAll(w.Result().Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	resp := serve(`<D:propfind xmlns:D="DAV:"><D:prop><D:supported-report-set/></D:prop></D:propfind>`)
+	for _, report := range []string{"calendar-query", "calendar-multiget"} {
+		want := `<supported-report xmlns="DAV:"><report xmlns="DAV:"><` + report + ` xmlns="urn:ietf:params:xml:ns:caldav"></` + report + `></report></supported-report>`
+		if !strings.Contains(resp, want) {
+			t.Errorf("want %v in supported-report-set:\n%v", report, resp)
+		}
+	}
+	if resp := serve(propFindAllProp); strings.Contains(resp, "supported-report-set") {
+		t.Errorf("want no supported-report-set in allprop response:\n%v", resp)
+	}
+}
+
 type dataReqBackend struct {
 	*testBackend
 	reqs []CalendarCompRequest

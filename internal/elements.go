@@ -342,6 +342,34 @@ func (t *ResourceType) Is(name xml.Name) bool {
 	return false
 }
 
+var SupportedReportSetName = xml.Name{Namespace, "supported-report-set"}
+
+// https://tools.ietf.org/html/rfc3253#section-3.1.5
+type SupportedReportSet struct {
+	XMLName xml.Name          `xml:"DAV: supported-report-set"`
+	Reports []SupportedReport `xml:"supported-report"`
+}
+
+type SupportedReport struct {
+	XMLName xml.Name `xml:"DAV: supported-report"`
+	Report  Report   `xml:"report"`
+}
+
+type Report struct {
+	XMLName xml.Name      `xml:"DAV: report"`
+	Raw     []RawXMLValue `xml:",any"`
+}
+
+func NewSupportedReportSet(names ...xml.Name) *SupportedReportSet {
+	set := &SupportedReportSet{}
+	for _, name := range names {
+		set.Reports = append(set.Reports, SupportedReport{
+			Report: Report{Raw: xmlNamesToRaw([]xml.Name{name})},
+		})
+	}
+	return set
+}
+
 // https://tools.ietf.org/html/rfc4918#section-15.4
 type GetContentLength struct {
 	XMLName xml.Name `xml:"DAV: getcontentlength"`

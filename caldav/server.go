@@ -671,6 +671,7 @@ func (b *backend) propFindCalendar(ctx context.Context, propfind *internal.PropF
 			}, nil
 		}
 		props[internal.CurrentUserPrivilegeSetName] = internal.PropFindValue(internal.NewCurrentUserPrivilegeSet(cal.ReadOnly))
+		props[internal.SupportedReportSetName] = internal.PropFindValue(internal.NewSupportedReportSet(calendarQueryName, calendarMultigetName))
 		if cal.Description != "" {
 			props[calendarDescriptionName] = internal.PropFindValue(&calendarDescription{
 				Description: cal.Description,
@@ -846,6 +847,7 @@ var protectedProps = map[xml.Name]bool{
 	internal.GetCTagName:                 true,
 	internal.CurrentUserPrincipalName:    true,
 	internal.CurrentUserPrivilegeSetName: true,
+	internal.SupportedReportSetName:      true,
 	supportedCalendarDataName:            true,
 	supportedCalendarComponentSetName:    true,
 	maxResourceSizeName:                  true,

@@ -560,6 +560,10 @@ func (b *backend) propFindAddressBook(ctx context.Context, propfind *internal.Pr
 		internal.CurrentUserPrivilegeSetName: internal.PropFindValue(internal.NewCurrentUserPrivilegeSet(ab.ReadOnly)),
 	}
 
+	// Like the other properties of RFC 3253, not part of allprop
+	if propfind.AllProp == nil {
+		props[internal.SupportedReportSetName] = internal.PropFindValue(internal.NewSupportedReportSet(addressBookQueryName, addressBookMultigetName))
+	}
 	if ab.Name != "" {
 		props[internal.DisplayNameName] = internal.PropFindValue(&internal.DisplayName{
 			Name: ab.Name,
@@ -741,6 +745,7 @@ var protectedProps = map[xml.Name]bool{
 	internal.GetCTagName:                 true,
 	internal.CurrentUserPrincipalName:    true,
 	internal.CurrentUserPrivilegeSetName: true,
+	internal.SupportedReportSetName:      true,
 	supportedAddressDataName:             true,
 	maxResourceSizeName:                  true,
 }

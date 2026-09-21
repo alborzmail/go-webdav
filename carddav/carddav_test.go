@@ -563,3 +563,32 @@ func TestObjectsWithoutData(t *testing.T) {
 		})
 	}
 }
+
+func TestPropFindSupportedReportSet(t *testing.T) {
+	handler := Handler{Backend: &testBackend{}}
+	serve := func(body string) string {
+		req := httptest.NewRequest("PROPFIND", "/user/contacts/default/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Depth", "0")
+		ctx := context.WithValue(req.Context(), currentUserPrincipalKey, "/user/")
+		ctx = context.WithValue(ctx, addressBookPathKey, "/user/contacts/default/")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
+		data, err := io.ReadAll(w.Result().Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	resp := serve(`<D:propfind xmlns:D="DAV:"><D:prop><D:supported-report-set/></D:prop></D:propfind>`)
+	for _, report := range []string{"addressbook-query", "addressbook-multiget"} {
+		want := `<supported-report xmlns="DAV:"><report xmlns="DAV:"><` + report + ` xmlns="urn:ietf:params:xml:ns:carddav"></` + report + `></report></supported-report>`
+		if !strings.Contains(resp, want) {
+			t.Errorf("Expected %v in supported-report-set:\n%v", report, resp)
+		}
+	}
+	if resp := serve(`<D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`); strings.Contains(resp, "supported-report-set") {
+		t.Errorf("Expected no supported-report-set in allprop response:\n%v", resp)
+	}
+}
