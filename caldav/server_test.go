@@ -584,6 +584,42 @@ func TestFindMultiget(t *testing.T) {
 	}
 }
 
+func TestMultigetWithoutMultiGetBackend(t *testing.T) {
+	cal, err := ical.NewDecoder(strings.NewReader(calendarTestData1)).Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	object := CalendarObject{
+		Path: "/user/calendars/default/DC6C50A017428C5216A2F1CD.ics",
+		Data: cal,
+		ETag: "191382932849",
+	}
+	// Embedding the interface hides GetCalendarObjects
+	handler := Handler{Backend: struct{ Backend }{&testBackend{
+		objectMap: map[string][]CalendarObject{
+			"/user/calendars/default/": []CalendarObject{object},
+		},
+	}}}
+
+	req := httptest.NewRequest("REPORT", "/user/calendars/default/", strings.NewReader(multigetTest1))
+	req.Header.Set("Content-Type", "application/xml")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := string(data)
+	if !strings.Contains(resp, "UID:DC6C50A017428C5216A2F1CD@example.com") {
+		t.Fatalf("want object in multiget report:\n%v", resp)
+	} else if !strings.Contains(resp, "find calendar object at: /user/calendars/default/74855313FA803DA593CD579A.ics") {
+		t.Fatalf("want the backend's error for the missing object:\n%v", resp)
+	}
+}
+
 type testBackend struct {
 	calendars []Calendar
 	objectMap map[string][]CalendarObject

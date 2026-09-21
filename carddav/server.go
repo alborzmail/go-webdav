@@ -33,13 +33,20 @@ type Backend interface {
 	CreateAddressBook(ctx context.Context, addressBook *AddressBook) error
 	UpdateAddressBook(ctx context.Context, path string, update *AddressBookUpdate) error
 	DeleteAddressBook(ctx context.Context, path string) error
-	GetAddressObjects(ctx context.Context, paths []string, req *AddressDataRequest) ([]AddressObject, error)
+	GetAddressObject(ctx context.Context, path string, req *AddressDataRequest) (*AddressObject, error)
 	ListAddressObjects(ctx context.Context, path string, req *AddressDataRequest) ([]AddressObject, error)
 	QueryAddressObjects(ctx context.Context, path string, query *AddressBookQuery) ([]AddressObject, error)
 	PutAddressObject(ctx context.Context, path string, card vcard.Card, opts *PutAddressObjectOptions) (*AddressObject, error)
 	DeleteAddressObject(ctx context.Context, path string) error
 
 	webdav.UserPrincipalBackend
+}
+
+// MultiGetBackend is an optional interface a Backend can implement to fetch
+// the objects of an addressbook-multiget in one call. A path missing from the
+// result is reported as not found.
+type MultiGetBackend interface {
+	GetAddressObjects(ctx context.Context, paths []string, req *AddressDataRequest) ([]AddressObject, error)
 }
 
 // Handler handles CardDAV HTTP requests. It can be used to create a CardDAV
@@ -224,15 +231,17 @@ func (h *Handler) handleMultiget(ctx context.Context, w http.ResponseWriter, mul
 	}
 
 	// Prefetch all objects and index by path for quick lookup in response generation.
-	lookups := make(map[string]*AddressObject)
-
-	paths := make([]string, len(multiget.Hrefs))
-	for i, href := range multiget.Hrefs {
-		paths[i] = href.Path
-	}
-	if objects, err := h.Backend.GetAddressObjects(ctx, paths, &dataReq); err != nil {
-		return err
-	} else {
+	var lookups map[string]*AddressObject
+	if mb, ok := h.Backend.(MultiGetBackend); ok {
+		paths := make([]string, len(multiget.Hrefs))
+		for i, href := range multiget.Hrefs {
+			paths[i] = href.Path
+		}
+		objects, err := mb.GetAddressObjects(ctx, paths, &dataReq)
+		if err != nil {
+			return err
+		}
+		lookups = make(map[string]*AddressObject, len(objects))
 		for i := range objects {
 			lookups[objects[i].Path] = &objects[i]
 		}
@@ -242,9 +251,10 @@ func (h *Handler) handleMultiget(ctx context.Context, w http.ResponseWriter, mul
 	var resps []internal.Response
 	for _, href := range multiget.Hrefs {
 		var ao *AddressObject
-		var found bool
 		var err error
-		if ao, found = lookups[href.Path]; !found {
+		if lookups == nil {
+			ao, err = h.Backend.GetAddressObject(ctx, href.Path, &dataReq)
+		} else if ao = lookups[href.Path]; ao == nil {
 			err = internal.HTTPErrorf(http.StatusNotFound, "Couldn't find address object at: %s", href.Path)
 		}
 		if err != nil {
@@ -310,7 +320,7 @@ func (b *backend) Options(r *http.Request) (caps []string, allow []string, err e
 	}
 
 	var dataReq AddressDataRequest
-	_, err = b.Backend.GetAddressObjects(r.Context(), []string{r.URL.Path}, &dataReq)
+	_, err = b.Backend.GetAddressObject(r.Context(), r.URL.Path, &dataReq)
 	if httpErr, ok := err.(*internal.HTTPError); ok && httpErr.Code == http.StatusNotFound {
 		return caps, []string{http.MethodOptions, http.MethodPut}, nil
 	} else if err != nil {
@@ -334,12 +344,10 @@ func (b *backend) HeadGet(w http.ResponseWriter, r *http.Request) error {
 	if r.Method != http.MethodHead {
 		dataReq.AllProp = true
 	}
-	aos, err := b.Backend.GetAddressObjects(r.Context(), []string{r.URL.Path}, &dataReq)
+	ao, err := b.Backend.GetAddressObject(r.Context(), r.URL.Path, &dataReq)
 	if err != nil {
 		return err
 	}
-
-	ao := &aos[0]
 
 	w.Header().Set("Content-Type", vcard.MIMEType)
 	if ao.ContentLength > 0 {
@@ -435,12 +443,12 @@ func (b *backend) PropFind(r *http.Request, propfind *internal.PropFind, depth i
 			resps = append(resps, resps_...)
 		}
 	case resourceTypeAddressObject:
-		aos, err := b.Backend.GetAddressObjects(r.Context(), []string{r.URL.Path}, &dataReq)
+		ao, err := b.Backend.GetAddressObject(r.Context(), r.URL.Path, &dataReq)
 		if err != nil {
 			return nil, err
 		}
 
-		resp, err := b.propFindAddressObject(r.Context(), propfind, &aos[0])
+		resp, err := b.propFindAddressObject(r.Context(), propfind, ao)
 		if err != nil {
 			return nil, err
 		}
