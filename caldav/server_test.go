@@ -324,6 +324,38 @@ func TestMkCalendar(t *testing.T) {
 	}
 }
 
+func TestMkCalendarBody(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		body          string
+		contentLength int64
+		wantName      string
+	}{
+		{name: "empty", body: ""},
+		{name: "empty-chunked", body: "", contentLength: -1},
+		{name: "chunked", body: TestMkCalendarReq, contentLength: -1, wantName: "test calendar"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &testBackend{}
+			req := httptest.NewRequest("MKCALENDAR", "/user/calendars/default/", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/xml")
+			if tc.contentLength != 0 {
+				req.ContentLength = tc.contentLength
+			}
+			w := httptest.NewRecorder()
+			// http.MaxBytesReader answers a zero-length read with no error
+			req.Body = http.MaxBytesReader(w, req.Body, 1<<20)
+			(&Handler{Backend: backend}).ServeHTTP(w, req)
+
+			if sc := w.Result().StatusCode; sc != http.StatusCreated {
+				t.Fatalf("unexpected status code: %d", sc)
+			} else if len(backend.calendars) != 1 || backend.calendars[0].Name != tc.wantName {
+				t.Errorf("unexpected calendars: %+v", backend.calendars)
+			}
+		})
+	}
+}
+
 func TestMkCalendarProps(t *testing.T) {
 	backend := &testBackend{}
 	handler := Handler{Backend: backend, Prefix: "/dav"}

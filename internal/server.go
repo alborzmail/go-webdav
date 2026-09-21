@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -58,8 +59,24 @@ func ReadRequestBody(r *http.Request) ([]byte, error) {
 }
 
 func IsRequestBodyEmpty(r *http.Request) bool {
-	_, err := r.Body.Read(nil)
-	return err == io.EOF
+	if r.Body == nil || r.Body == http.NoBody {
+		return true
+	} else if r.ContentLength > 0 {
+		return false
+	}
+
+	// Peek one byte and put it back: a zero-length read says nothing, a
+	// wrapped body such as http.MaxBytesReader answers it without an error
+	var b [1]byte
+	n, err := io.ReadFull(r.Body, b[:])
+	if n == 0 {
+		return err == io.EOF
+	}
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(b[:]), r.Body), r.Body}
+	return false
 }
 
 func ServeXML(w http.ResponseWriter) *xml.Encoder {
