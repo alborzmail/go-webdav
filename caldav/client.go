@@ -200,6 +200,9 @@ func encodeCalendarReq(c *CalendarCompRequest) (*internal.Prop, error) {
 
 func encodeCompFilter(filter *CompFilter) *compFilter {
 	encoded := compFilter{Name: filter.Name}
+	if filter.IsNotDefined {
+		encoded.IsNotDefined = &struct{}{}
+	}
 	if !filter.Start.IsZero() || !filter.End.IsZero() {
 		encoded.TimeRange = &timeRange{
 			Start: dateWithUTCTime(filter.Start),
@@ -217,6 +220,9 @@ func encodeCompFilter(filter *CompFilter) *compFilter {
 
 func encodePropFilter(filter *PropFilter) *propFilter {
 	encoded := propFilter{Name: filter.Name}
+	if filter.IsNotDefined {
+		encoded.IsNotDefined = &struct{}{}
+	}
 	if !filter.Start.IsZero() || !filter.End.IsZero() {
 		encoded.TimeRange = &timeRange{
 			Start: dateWithUTCTime(filter.Start),
@@ -234,6 +240,9 @@ func encodeParamFilter(pf ParamFilter) paramFilter {
 	encoded := paramFilter{
 		Name:      pf.Name,
 		TextMatch: encodeTextMatch(pf.TextMatch),
+	}
+	if pf.IsNotDefined {
+		encoded.IsNotDefined = &struct{}{}
 	}
 	return encoded
 }

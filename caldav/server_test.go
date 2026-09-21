@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1250,6 +1251,35 @@ func TestDeadProperties(t *testing.T) {
 		t.Errorf("unexpected XML: %s", update.DeadProperties[0].XML)
 	} else if len(update.RemovedDeadProperties) != 1 || update.RemovedDeadProperties[0].Local != "refreshrate" {
 		t.Errorf("unexpected removed dead properties: %v", update.RemovedDeadProperties)
+	}
+}
+
+func TestEncodeCompFilterIsNotDefined(t *testing.T) {
+	filter := CompFilter{
+		Name: "VCALENDAR",
+		Comps: []CompFilter{
+			{Name: "VTODO", Props: []PropFilter{
+				{Name: "STATUS", IsNotDefined: true},
+				{Name: "ATTENDEE", ParamFilter: []ParamFilter{{Name: "PARTSTAT", IsNotDefined: true}}},
+			}},
+			{Name: "VEVENT", IsNotDefined: true},
+		},
+	}
+
+	b, err := xml.Marshal(encodeCompFilter(&filter))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var el compFilter
+	if err := xml.Unmarshal(b, &el); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeCompFilter(&el)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(*decoded, filter) {
+		t.Errorf("want %+v, got %+v", filter, *decoded)
 	}
 }
 
