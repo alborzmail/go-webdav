@@ -4,6 +4,7 @@
 package caldav
 
 import (
+	"encoding/xml"
 	"fmt"
 	"time"
 
@@ -77,6 +78,9 @@ type Calendar struct {
 	// CTag, when set, is reported as the CalendarServer getctag property: an
 	// opaque token that must change whenever the calendar's contents change.
 	CTag string
+	// DeadProperties are the properties stored for clients, see
+	// CalendarUpdate. The server reports them as they are.
+	DeadProperties []webdav.DeadProperty
 }
 
 // CalendarUpdate holds the changes of a PROPPATCH request. A nil field is left
@@ -86,6 +90,11 @@ type CalendarUpdate struct {
 	Description *string
 	Color       *string
 	Timezone    *ical.Calendar
+	// RemovedDeadProperties are dropped, then DeadProperties are stored,
+	// each replacing the one of the same name. A backend which can't store
+	// them must return an error.
+	RemovedDeadProperties []xml.Name
+	DeadProperties        []webdav.DeadProperty
 }
 
 type CalendarCompRequest struct {

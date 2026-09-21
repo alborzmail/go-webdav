@@ -552,6 +552,11 @@ func (b *backend) propFindAddressBook(ctx context.Context, propfind *internal.Pr
 	if ab.CTag != "" {
 		props[internal.GetCTagName] = internal.PropFindValue(&internal.GetCTag{CTag: ab.CTag})
 	}
+	for _, dead := range ab.DeadProperties {
+		if _, ok := props[dead.Name]; !ok {
+			props[dead.Name] = internal.PropFindXML(dead.XML)
+		}
+	}
 
 	return internal.NewPropFindResponse(ab.Path, propfind, props)
 }
@@ -647,14 +652,17 @@ func (b *backend) PropPatch(r *http.Request, update *internal.PropertyUpdate) (*
 
 	switch resType {
 	case resourceTypeAddressBook:
-		abUpdate, err := b.propPatchAddressBook(r.Context(), update, resp)
-		if err != nil {
+		var abUpdate AddressBookUpdate
+		resp, ok, err := internal.NewPropPatchResponse(r.URL.Path, update, func(name xml.Name, raw *internal.RawXMLValue) error {
+			return propPatchAddressBook(&abUpdate, name, raw)
+		})
+		if err != nil || !ok {
+			return resp, err
+		}
+		if err := b.Backend.UpdateAddressBook(r.Context(), r.URL.Path, &abUpdate); err != nil {
 			return nil, err
 		}
-		err = b.Backend.UpdateAddressBook(r.Context(), r.URL.Path, &abUpdate)
-		if err != nil {
-			return nil, err
-		}
+		return resp, nil
 	case resourceTypeAddressObject:
 		// TODO: support PROPPATCH for address objects
 		return nil, internal.HTTPErrorf(http.StatusNotImplemented, "PROPPATCH for address objects not yet implemented")
@@ -687,70 +695,61 @@ func (b *backend) PropPatch(r *http.Request, update *internal.PropertyUpdate) (*
 	return resp, nil
 }
 
-func (b *backend) propPatchAddressBook(ctx context.Context, update *internal.PropertyUpdate, resp *internal.Response) (AddressBookUpdate, error) {
-	// TODO handle all properties
+// protectedProps are the properties of an address book the server computes.
+var protectedProps = map[xml.Name]bool{
+	internal.ResourceTypeName:            true,
+	internal.GetContentLengthName:        true,
+	internal.GetContentTypeName:          true,
+	internal.GetLastModifiedName:         true,
+	internal.GetETagName:                 true,
+	internal.GetCTagName:                 true,
+	internal.CurrentUserPrincipalName:    true,
+	internal.CurrentUserPrivilegeSetName: true,
+	supportedAddressDataName:             true,
+	maxResourceSizeName:                  true,
+}
+
+func decodeDeadProperty(name xml.Name, raw *internal.RawXMLValue) (*webdav.DeadProperty, error) {
+	if protectedProps[name] {
+		return nil, internal.HTTPErrorf(http.StatusForbidden, "carddav: %v is protected", name.Local)
+	}
+	b, err := raw.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	return &webdav.DeadProperty{Name: name, XML: b}, nil
+}
+
+func propPatchAddressBook(abUpdate *AddressBookUpdate, name xml.Name, raw *internal.RawXMLValue) error {
 	var (
-		result AddressBookUpdate
-		name   internal.DisplayName
-		desc   addressbookDescription
+		displayName internal.DisplayName
+		desc        addressbookDescription
 	)
-	for _, prop := range update.Remove {
-		for _, raw := range prop.Prop.Raw {
-			rxn, ok := raw.XMLName()
-			if !ok {
-				return result, fmt.Errorf("failed to parse properties")
-			}
-			switch rxn {
-			case internal.DisplayNameName:
-				result.Name = new(string)
-				if err := resp.EncodeProp(http.StatusOK, internal.DisplayName{}); err != nil {
-					return result, err
-				}
-			case addressBookDescriptionName:
-				result.Description = new(string)
-				if err := resp.EncodeProp(http.StatusOK, desc); err != nil {
-					return result, err
-				}
-			default:
-				emptyVal := internal.NewRawXMLElement(rxn, nil, nil)
-				if err := resp.EncodeProp(http.StatusNotImplemented, emptyVal); err != nil {
-					return result, err
-				}
-			}
+	var v interface{}
+	switch name {
+	case internal.DisplayNameName:
+		v, abUpdate.Name = &displayName, &displayName.Name
+	case addressBookDescriptionName:
+		v, abUpdate.Description = &desc, &desc.Description
+	default:
+		if raw == nil {
+			abUpdate.RemovedDeadProperties = append(abUpdate.RemovedDeadProperties, name)
+			return nil
 		}
-	}
-	for _, prop := range update.Set {
-		for _, raw := range prop.Prop.Raw {
-			rxn, ok := raw.XMLName()
-			if !ok {
-				return result, fmt.Errorf("failed to parse properties")
-			}
-			switch rxn {
-			case internal.DisplayNameName:
-				if err := raw.Decode(&name); err != nil {
-					return result, err
-				}
-				result.Name = &name.Name
-				if err := resp.EncodeProp(http.StatusOK, internal.DisplayName{}); err != nil {
-					return result, err
-				}
-			case addressBookDescriptionName:
-				if err := raw.Decode(&desc); err != nil {
-					return result, err
-				}
-				result.Description = &desc.Description
-				if err := resp.EncodeProp(http.StatusOK, desc); err != nil {
-					return result, err
-				}
-			default:
-				emptyVal := internal.NewRawXMLElement(rxn, nil, nil)
-				if err := resp.EncodeProp(http.StatusNotImplemented, emptyVal); err != nil {
-					return result, err
-				}
-			}
+		dead, err := decodeDeadProperty(name, raw)
+		if err != nil {
+			return err
 		}
+		abUpdate.DeadProperties = append(abUpdate.DeadProperties, *dead)
+		return nil
 	}
-	return result, nil
+	if raw == nil {
+		return nil
+	}
+	if err := raw.Decode(v); err != nil {
+		return &internal.HTTPError{http.StatusBadRequest, err}
+	}
+	return nil
 }
 
 func (b *backend) Put(w http.ResponseWriter, r *http.Request) error {
@@ -824,12 +823,23 @@ func (b *backend) Mkcol(r *http.Request) error {
 			return internal.HTTPErrorf(http.StatusBadRequest, "carddav: error parsing mkcol request: %s", err.Error())
 		}
 
-		if !m.ResourceType.Is(internal.CollectionName) || !m.ResourceType.Is(addressBookName) {
+		prop := m.Set.Prop
+		if !prop.ResourceType.Is(internal.CollectionName) || !prop.ResourceType.Is(addressBookName) {
 			return internal.HTTPErrorf(http.StatusBadRequest, "carddav: unexpected resource type")
 		}
-		ab.Name = m.DisplayName
-		ab.Description = m.Description.Description
-		// TODO ...
+		ab.Name = prop.DisplayName
+		ab.Description = prop.Description.Description
+		for i := range prop.Raw {
+			name, ok := prop.Raw[i].XMLName()
+			if !ok {
+				continue
+			}
+			dead, err := decodeDeadProperty(name, &prop.Raw[i])
+			if err != nil {
+				return err
+			}
+			ab.DeadProperties = append(ab.DeadProperties, *dead)
+		}
 	}
 
 	return b.Backend.CreateAddressBook(r.Context(), &ab)

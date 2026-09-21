@@ -168,6 +168,13 @@ func PropFindValue(value interface{}) PropFindFunc {
 	}
 }
 
+// PropFindXML returns an XML value encoded with RawXMLValue.Bytes.
+func PropFindXML(b []byte) PropFindFunc {
+	return func(*RawXMLValue) (interface{}, error) {
+		return DecodeRawXMLBytes(b)
+	}
+}
+
 func NewPropFindResponse(path string, propfind *PropFind, props map[xml.Name]PropFindFunc) (*Response, error) {
 	resp := &Response{Hrefs: []Href{Href{Path: path}}}
 

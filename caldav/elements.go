@@ -269,6 +269,7 @@ type mkcolProp struct {
 	CalendarTimezone              string                        `xml:"urn:ietf:params:xml:ns:caldav calendar-timezone"`
 	CalendarColor                 string                        `xml:"http://apple.com/ns/ical/ calendar-color"`
 	SupportedCalendarComponentSet supportedCalendarComponentSet `xml:"urn:ietf:params:xml:ns:caldav supported-calendar-component-set"`
+	Raw                           []internal.RawXMLValue        `xml:",any"`
 }
 
 type mkcalendarReq struct {

@@ -1198,6 +1198,60 @@ func TestPropPatchCalendarFailedDependency(t *testing.T) {
 	}
 }
 
+func TestDeadProperties(t *testing.T) {
+	backend := &testBackend{}
+	handler := Handler{Backend: backend}
+	serve := func(method, body string) string {
+		req := httptest.NewRequest(method, "/user/calendars/default/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Depth", "0")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		data, err := io.ReadAll(w.Result().Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	order := xml.Name{Space: "http://apple.com/ns/ical/", Local: "calendar-order"}
+
+	serve("MKCALENDAR", TestMkCalendarReq)
+	if len(backend.calendars) != 1 {
+		t.Fatalf("want 1 calendar, got %d", len(backend.calendars))
+	}
+	var found bool
+	for _, dead := range backend.calendars[0].DeadProperties {
+		if dead.Name == order {
+			found = true
+		} else if dead.Name == calendarColorName || dead.Name == internal.DisplayNameName {
+			t.Errorf("want %v handled by the server", dead.Name)
+		}
+	}
+	if !found {
+		t.Fatalf("want calendar-order kept: %v", backend.calendars[0].DeadProperties)
+	}
+
+	resp := serve("PROPFIND", propFindAllProp)
+	if !strings.Contains(resp, `<calendar-order xmlns="http://apple.com/ns/ical/">2</calendar-order>`) {
+		t.Fatalf("want calendar-order in allprop response:\n%v", resp)
+	}
+
+	resp = serve("PROPPATCH", `<D:propertyupdate xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/">
+		<D:set><D:prop><A:calendar-order>3</A:calendar-order></D:prop></D:set>
+		<D:remove><D:prop><A:refreshrate/></D:prop></D:remove>
+	</D:propertyupdate>`)
+	update := backend.updates["/user/calendars/default/"]
+	if update == nil {
+		t.Fatalf("want the calendar updated:\n%v", resp)
+	} else if len(update.DeadProperties) != 1 || update.DeadProperties[0].Name != order {
+		t.Errorf("unexpected dead properties: %v", update.DeadProperties)
+	} else if string(update.DeadProperties[0].XML) != `<calendar-order xmlns="http://apple.com/ns/ical/">3</calendar-order>` {
+		t.Errorf("unexpected XML: %s", update.DeadProperties[0].XML)
+	} else if len(update.RemovedDeadProperties) != 1 || update.RemovedDeadProperties[0].Local != "refreshrate" {
+		t.Errorf("unexpected removed dead properties: %v", update.RemovedDeadProperties)
+	}
+}
+
 type testBackend struct {
 	calendars []Calendar
 	objectMap map[string][]CalendarObject

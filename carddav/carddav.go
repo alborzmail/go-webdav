@@ -4,6 +4,7 @@
 package carddav
 
 import (
+	"encoding/xml"
 	"time"
 
 	"github.com/emersion/go-vcard"
@@ -34,11 +35,19 @@ type AddressBook struct {
 	// CTag, when set, is reported as the CalendarServer getctag property: an
 	// opaque token that must change whenever the address book's contents change.
 	CTag string
+	// DeadProperties are the properties stored for clients, see
+	// AddressBookUpdate. The server reports them as they are.
+	DeadProperties []webdav.DeadProperty
 }
 
 type AddressBookUpdate struct {
 	Name        *string
 	Description *string
+	// RemovedDeadProperties are dropped, then DeadProperties are stored,
+	// each replacing the one of the same name. A backend which can't store
+	// them must return an error.
+	RemovedDeadProperties []xml.Name
+	DeadProperties        []webdav.DeadProperty
 }
 
 func (ab *AddressBook) SupportsAddressData(contentType, version string) bool {

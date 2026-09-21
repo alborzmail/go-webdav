@@ -2,7 +2,9 @@ package carddav
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -252,5 +254,72 @@ func TestCreateAddressbookMinimalBody(t *testing.T) {
 	}
 	if c.Description != "My primary address book." {
 		t.Fatalf("Address book sdscription is '%s', expected 'My primary address book.'", c.Description)
+	}
+}
+
+type deadPropsBackend struct {
+	testBackend
+	update *AddressBookUpdate
+}
+
+func (b *deadPropsBackend) GetAddressBook(ctx context.Context, path string) (*AddressBook, error) {
+	return &b.addressBooks[0], nil
+}
+
+func (b *deadPropsBackend) UpdateAddressBook(ctx context.Context, path string, update *AddressBookUpdate) error {
+	b.update = update
+	return nil
+}
+
+func TestDeadProperties(t *testing.T) {
+	backend := &deadPropsBackend{}
+	handler := Handler{Backend: backend, Prefix: "/dav"}
+	serve := func(method, body string) string {
+		req := httptest.NewRequest(method, "/dav/addressbooks/user0/test-addressbook", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Depth", "0")
+		ctx := context.WithValue(req.Context(), currentUserPrincipalKey, "/dav/principals/user0/")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
+		data, err := io.ReadAll(w.Result().Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	color := xml.Name{Space: "http://inf-it.com/ns/ab/", Local: "addressbook-color"}
+	colorProp := `<I:addressbook-color xmlns:I="http://inf-it.com/ns/ab/">#ff0000</I:addressbook-color>`
+
+	serve("MKCOL", strings.Replace(mkcolRequestBody, "<D:displayname>", colorProp+"<D:displayname>", 1))
+	if len(backend.addressBooks) != 1 {
+		t.Fatalf("Found %d address books, expected 1", len(backend.addressBooks))
+	}
+	ab := backend.addressBooks[0]
+	if ab.Name != "Lisa's Contacts" || ab.Description != "My primary address book." {
+		t.Errorf("Unexpected address book: %+v", ab)
+	}
+	if len(ab.DeadProperties) != 1 || ab.DeadProperties[0].Name != color {
+		t.Fatalf("Unexpected dead properties: %v", ab.DeadProperties)
+	}
+
+	resp := serve("PROPFIND", `<D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`)
+	if !strings.Contains(resp, `<addressbook-color xmlns="http://inf-it.com/ns/ab/">#ff0000</addressbook-color>`) {
+		t.Fatalf("Expected addressbook-color in allprop response:\n%v", resp)
+	}
+
+	resp = serve("PROPPATCH", `<D:propertyupdate xmlns:D="DAV:"><D:remove><D:prop>`+colorProp+`</D:prop></D:remove></D:propertyupdate>`)
+	if backend.update == nil {
+		t.Fatalf("Expected the address book updated:\n%v", resp)
+	} else if len(backend.update.RemovedDeadProperties) != 1 || backend.update.RemovedDeadProperties[0] != color {
+		t.Errorf("Unexpected removed dead properties: %v", backend.update.RemovedDeadProperties)
+	}
+
+	backend.update = nil
+	resp = serve("PROPPATCH", `<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop>`+colorProp+
+		`<D:resourcetype/></D:prop></D:set></D:propertyupdate>`)
+	if !strings.Contains(resp, "403 Forbidden") || !strings.Contains(resp, "424 Failed Dependency") {
+		t.Errorf("Expected the protected property to fail the others:\n%v", resp)
+	} else if backend.update != nil {
+		t.Errorf("Expected no update applied")
 	}
 }

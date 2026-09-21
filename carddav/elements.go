@@ -213,9 +213,17 @@ func (r *reportReq) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 }
 
 type mkcolReq struct {
-	XMLName      xml.Name               `xml:"DAV: mkcol"`
-	ResourceType internal.ResourceType  `xml:"set>prop>resourcetype"`
-	DisplayName  string                 `xml:"set>prop>displayname"`
-	Description  addressbookDescription `xml:"set>prop>addressbook-description"`
-	// TODO this could theoretically contain all addressbook properties?
+	XMLName xml.Name `xml:"DAV: mkcol"`
+	Set     mkcolSet `xml:"DAV: set"`
+}
+
+type mkcolSet struct {
+	Prop mkcolProp `xml:"DAV: prop"`
+}
+
+type mkcolProp struct {
+	ResourceType internal.ResourceType  `xml:"DAV: resourcetype"`
+	DisplayName  string                 `xml:"DAV: displayname"`
+	Description  addressbookDescription `xml:"urn:ietf:params:xml:ns:carddav addressbook-description"`
+	Raw          []internal.RawXMLValue `xml:",any"`
 }

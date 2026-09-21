@@ -4,6 +4,7 @@
 package webdav
 
 import (
+	"encoding/xml"
 	"strings"
 	"time"
 
@@ -33,6 +34,13 @@ type RemoveAllOptions struct {
 type CopyOptions struct {
 	NoRecursive bool
 	NoOverwrite bool
+}
+
+// DeadProperty is a property the server stores for its clients without
+// knowing what it means (RFC 4918 section 4.1). XML is the property's element.
+type DeadProperty struct {
+	Name xml.Name
+	XML  []byte
 }
 
 type MoveOptions struct {

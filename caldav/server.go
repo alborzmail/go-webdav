@@ -673,6 +673,11 @@ func (b *backend) propFindCalendar(ctx context.Context, propfind *internal.PropF
 			Name: cal.Name,
 		})
 	}
+	for _, dead := range cal.DeadProperties {
+		if _, ok := props[dead.Name]; !ok {
+			props[dead.Name] = internal.PropFindXML(dead.XML)
+		}
+	}
 
 	// TODO: CALDAV:min-date-time, CALDAV:max-date-time, CALDAV:max-instances, CALDAV:max-attendees-per-instance
 
@@ -789,6 +794,32 @@ func (b *backend) PropPatch(r *http.Request, update *internal.PropertyUpdate) (*
 	return resp, nil
 }
 
+// protectedProps are the properties of a calendar the server computes.
+var protectedProps = map[xml.Name]bool{
+	internal.ResourceTypeName:            true,
+	internal.GetContentLengthName:        true,
+	internal.GetContentTypeName:          true,
+	internal.GetLastModifiedName:         true,
+	internal.GetETagName:                 true,
+	internal.GetCTagName:                 true,
+	internal.CurrentUserPrincipalName:    true,
+	internal.CurrentUserPrivilegeSetName: true,
+	supportedCalendarDataName:            true,
+	supportedCalendarComponentSetName:    true,
+	maxResourceSizeName:                  true,
+}
+
+func decodeDeadProperty(name xml.Name, raw *internal.RawXMLValue) (*webdav.DeadProperty, error) {
+	if protectedProps[name] {
+		return nil, internal.HTTPErrorf(http.StatusForbidden, "caldav: %v is protected", name.Local)
+	}
+	b, err := raw.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	return &webdav.DeadProperty{Name: name, XML: b}, nil
+}
+
 func propPatchCalendar(cu *CalendarUpdate, name xml.Name, raw *internal.RawXMLValue) error {
 	// TODO handle all properties
 	var (
@@ -808,7 +839,16 @@ func propPatchCalendar(cu *CalendarUpdate, name xml.Name, raw *internal.RawXMLVa
 	case calendarTimezoneName:
 		v, cu.Timezone = &tz, ical.NewCalendar()
 	default:
-		return internal.HTTPErrorf(http.StatusNotImplemented, "caldav: PROPPATCH of %v not implemented", name.Local)
+		if raw == nil {
+			cu.RemovedDeadProperties = append(cu.RemovedDeadProperties, name)
+			return nil
+		}
+		dead, err := decodeDeadProperty(name, raw)
+		if err != nil {
+			return err
+		}
+		cu.DeadProperties = append(cu.DeadProperties, *dead)
+		return nil
 	}
 	if raw == nil {
 		return nil
@@ -919,6 +959,18 @@ func decodeMkcolProp(prop *mkcolProp, cal *Calendar) error {
 	cal.SupportedComponentSet = make([]string, len(prop.SupportedCalendarComponentSet.Comp))
 	for i, v := range prop.SupportedCalendarComponentSet.Comp {
 		cal.SupportedComponentSet[i] = v.Name
+	}
+
+	for i := range prop.Raw {
+		name, ok := prop.Raw[i].XMLName()
+		if !ok {
+			continue
+		}
+		dead, err := decodeDeadProperty(name, &prop.Raw[i])
+		if err != nil {
+			return err
+		}
+		cal.DeadProperties = append(cal.DeadProperties, *dead)
 	}
 	return nil
 }
