@@ -82,7 +82,20 @@ func (val ConditionalMatch) ETag() (string, error) {
 //
 // The function returns early if no ETags are set (isSet is false) or if a wildcard (*) is used,
 // in which case all ETags match. For multiple ETags, it checks each one until a match is found or all are checked.
+//
+// The comparison is the strong one If-Match asks for: a weak ETag in the
+// header value never matches (RFC 7232 section 2.3.2).
 func (val ConditionalMatch) MatchETag(etag string) (isSet bool, match bool, err error) {
+	return val.matchETag(etag, false)
+}
+
+// MatchETagWeak is like MatchETag with the weak comparison If-None-Match asks
+// for: a weak ETag in the header value matches the ETag it was made from.
+func (val ConditionalMatch) MatchETagWeak(etag string) (isSet bool, match bool, err error) {
+	return val.matchETag(etag, true)
+}
+
+func (val ConditionalMatch) matchETag(etag string, weak bool) (isSet bool, match bool, err error) {
 	if !val.IsSet() {
 		return false, false, nil
 	} else if etag == "" {
@@ -92,8 +105,15 @@ func (val ConditionalMatch) MatchETag(etag string) (isSet bool, match bool, err 
 	}
 	quoted_etags := strings.Split(string(val), ",")
 	for _, quoted_etag := range quoted_etags {
+		quoted_etag = strings.TrimSpace(quoted_etag)
+		if strings.HasPrefix(quoted_etag, "W/") {
+			if !weak {
+				continue
+			}
+			quoted_etag = strings.TrimPrefix(quoted_etag, "W/")
+		}
 		var e internal.ETag
-		if err := e.UnmarshalText([]byte(strings.TrimSpace(quoted_etag))); err != nil {
+		if err := e.UnmarshalText([]byte(quoted_etag)); err != nil {
 			// opinionated returning `false` on match so caller
 			// should definitely check for non-nil `err`
 			return true, false, err
