@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-ical"
+	"github.com/emersion/go-webdav"
 	"github.com/emersion/go-webdav/internal"
 )
 
@@ -1252,10 +1253,55 @@ func TestDeadProperties(t *testing.T) {
 	}
 }
 
+type conditionalDeleteBackend struct {
+	*testBackend
+	ifMatch webdav.ConditionalMatch
+}
+
+func (b *conditionalDeleteBackend) DeleteCalendarObjectIfMatch(ctx context.Context, path string, ifMatch webdav.ConditionalMatch) error {
+	b.ifMatch = ifMatch
+	return nil
+}
+
+func TestDeleteIfMatch(t *testing.T) {
+	const path = "/user/calendars/default/event.ics"
+	backend := &testBackend{objectMap: map[string][]CalendarObject{
+		"/user/calendars/default/": []CalendarObject{{Path: path, ETag: "1"}},
+	}}
+	serve := func(b Backend, ifMatch string) int {
+		req := httptest.NewRequest(http.MethodDelete, path, nil)
+		req.Header.Set("If-Match", ifMatch)
+		w := httptest.NewRecorder()
+		(&Handler{Backend: b}).ServeHTTP(w, req)
+		return w.Result().StatusCode
+	}
+
+	if sc := serve(backend, `"2"`); sc != http.StatusPreconditionFailed {
+		t.Errorf("unexpected status code for a stale ETag: %d", sc)
+	} else if len(backend.deleted) != 0 {
+		t.Errorf("want the object kept")
+	}
+	if sc := serve(backend, `"2", "1"`); sc != http.StatusNoContent {
+		t.Errorf("unexpected status code for the current ETag: %d", sc)
+	} else if len(backend.deleted) != 1 {
+		t.Errorf("want the object deleted")
+	}
+
+	conditional := &conditionalDeleteBackend{testBackend: &testBackend{}}
+	if sc := serve(conditional, `"2"`); sc != http.StatusNoContent {
+		t.Errorf("unexpected status code: %d", sc)
+	} else if conditional.ifMatch != `"2"` {
+		t.Errorf("want If-Match handed to the backend, got %q", conditional.ifMatch)
+	} else if len(conditional.deleted) != 0 {
+		t.Errorf("want DeleteCalendarObject left alone")
+	}
+}
+
 type testBackend struct {
 	calendars []Calendar
 	objectMap map[string][]CalendarObject
 	updates   map[string]*CalendarUpdate
+	deleted   []string
 }
 
 func (t *testBackend) UpdateCalendar(ctx context.Context, path string, update *CalendarUpdate) error {
@@ -1293,6 +1339,7 @@ func (t *testBackend) CurrentUserPrincipal(ctx context.Context) (string, error) 
 }
 
 func (t *testBackend) DeleteCalendarObject(ctx context.Context, path string) error {
+	t.deleted = append(t.deleted, path)
 	return nil
 }
 

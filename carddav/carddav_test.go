@@ -323,3 +323,58 @@ func TestDeadProperties(t *testing.T) {
 		t.Errorf("Expected no update applied")
 	}
 }
+
+type deleteBackend struct {
+	testBackend
+	deleted []string
+	ifMatch webdav.ConditionalMatch
+}
+
+func (b *deleteBackend) GetAddressObject(ctx context.Context, path string, req *AddressDataRequest) (*AddressObject, error) {
+	return &AddressObject{Path: path, ETag: "1"}, nil
+}
+
+func (b *deleteBackend) DeleteAddressObject(ctx context.Context, path string) error {
+	b.deleted = append(b.deleted, path)
+	return nil
+}
+
+type conditionalDeleteBackend struct {
+	deleteBackend
+}
+
+func (b *conditionalDeleteBackend) DeleteAddressObjectIfMatch(ctx context.Context, path string, ifMatch webdav.ConditionalMatch) error {
+	b.ifMatch = ifMatch
+	return nil
+}
+
+func TestDeleteIfMatch(t *testing.T) {
+	serve := func(b Backend, ifMatch string) int {
+		req := httptest.NewRequest(http.MethodDelete, "/user/contacts/default/alice.vcf", nil)
+		req.Header.Set("If-Match", ifMatch)
+		w := httptest.NewRecorder()
+		(&Handler{Backend: b}).ServeHTTP(w, req)
+		return w.Result().StatusCode
+	}
+
+	backend := &deleteBackend{}
+	if sc := serve(backend, `"2"`); sc != http.StatusPreconditionFailed {
+		t.Errorf("Unexpected status code for a stale ETag: %d", sc)
+	} else if len(backend.deleted) != 0 {
+		t.Errorf("Expected the object kept")
+	}
+	if sc := serve(backend, `"2", "1"`); sc != http.StatusNoContent {
+		t.Errorf("Unexpected status code for the current ETag: %d", sc)
+	} else if len(backend.deleted) != 1 {
+		t.Errorf("Expected the object deleted")
+	}
+
+	conditional := &conditionalDeleteBackend{}
+	if sc := serve(conditional, `"2"`); sc != http.StatusNoContent {
+		t.Errorf("Unexpected status code: %d", sc)
+	} else if conditional.ifMatch != `"2"` {
+		t.Errorf("Expected If-Match handed to the backend, got %q", conditional.ifMatch)
+	} else if len(conditional.deleted) != 0 {
+		t.Errorf("Expected DeleteAddressObject left alone")
+	}
+}

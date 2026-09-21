@@ -42,6 +42,13 @@ type Backend interface {
 	webdav.UserPrincipalBackend
 }
 
+// ConditionalDeleteBackend is an optional interface a Backend can implement to
+// check the If-Match header of a DELETE request and delete the object in one
+// step. Without it the server compares the ETag itself, then deletes.
+type ConditionalDeleteBackend interface {
+	DeleteAddressObjectIfMatch(ctx context.Context, path string, ifMatch webdav.ConditionalMatch) error
+}
+
 // MultiGetBackend is an optional interface a Backend can implement to fetch
 // the objects of an addressbook-multiget in one call. A path missing from the
 // result is reported as not found.
@@ -803,6 +810,24 @@ func (b *backend) Delete(r *http.Request) error {
 	case resourceTypeAddressBook:
 		return b.Backend.DeleteAddressBook(r.Context(), r.URL.Path)
 	case resourceTypeAddressObject:
+		ifMatch := webdav.ConditionalMatch(r.Header.Get("If-Match"))
+		if !ifMatch.IsSet() {
+			return b.Backend.DeleteAddressObject(r.Context(), r.URL.Path)
+		}
+		if cb, ok := b.Backend.(ConditionalDeleteBackend); ok {
+			return cb.DeleteAddressObjectIfMatch(r.Context(), r.URL.Path, ifMatch)
+		}
+
+		var dataReq AddressDataRequest
+		ao, err := b.Backend.GetAddressObject(r.Context(), r.URL.Path, &dataReq)
+		if err != nil {
+			return err
+		}
+		if _, ok, err := ifMatch.MatchETag(ao.ETag); err != nil {
+			return &internal.HTTPError{http.StatusBadRequest, err}
+		} else if !ok && !ifMatch.IsWildcard() {
+			return internal.HTTPErrorf(http.StatusPreconditionFailed, "carddav: If-Match condition failed")
+		}
 		return b.Backend.DeleteAddressObject(r.Context(), r.URL.Path)
 	}
 	return internal.HTTPErrorf(http.StatusForbidden, "carddav: cannot delete resource at given location")

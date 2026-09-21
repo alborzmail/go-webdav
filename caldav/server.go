@@ -44,6 +44,13 @@ type Backend interface {
 	webdav.UserPrincipalBackend
 }
 
+// ConditionalDeleteBackend is an optional interface a Backend can implement to
+// check the If-Match header of a DELETE request and delete the object in one
+// step. Without it the server compares the ETag itself, then deletes.
+type ConditionalDeleteBackend interface {
+	DeleteCalendarObjectIfMatch(ctx context.Context, path string, ifMatch webdav.ConditionalMatch) error
+}
+
 // UpdateBackend is an optional interface a Backend can implement to support
 // PROPPATCH on calendars.
 type UpdateBackend interface {
@@ -913,6 +920,23 @@ func (b *backend) Put(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (b *backend) Delete(r *http.Request) error {
+	ifMatch := webdav.ConditionalMatch(r.Header.Get("If-Match"))
+	if ifMatch.IsSet() && b.resourceTypeAtPath(r.URL.Path) == resourceTypeCalendarObject {
+		if cb, ok := b.Backend.(ConditionalDeleteBackend); ok {
+			return cb.DeleteCalendarObjectIfMatch(r.Context(), r.URL.Path, ifMatch)
+		}
+
+		var dataReq CalendarCompRequest
+		co, err := b.Backend.GetCalendarObject(r.Context(), r.URL.Path, &dataReq)
+		if err != nil {
+			return err
+		}
+		if _, ok, err := ifMatch.MatchETag(co.ETag); err != nil {
+			return &internal.HTTPError{http.StatusBadRequest, err}
+		} else if !ok && !ifMatch.IsWildcard() {
+			return internal.HTTPErrorf(http.StatusPreconditionFailed, "caldav: If-Match condition failed")
+		}
+	}
 	return b.Backend.DeleteCalendarObject(r.Context(), r.URL.Path)
 }
 
