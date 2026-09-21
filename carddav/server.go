@@ -212,6 +212,7 @@ func (h *Handler) handleQuery(r *http.Request, w http.ResponseWriter, query *add
 			Prefix:  strings.TrimSuffix(h.Prefix, "/"),
 		}
 		propfind := internal.PropFind{
+			XMLName:  query.XMLName,
 			Prop:     query.Prop,
 			AllProp:  query.AllProp,
 			PropName: query.PropName,
@@ -279,6 +280,7 @@ func (h *Handler) handleMultiget(ctx context.Context, w http.ResponseWriter, mul
 			Prefix:  strings.TrimSuffix(h.Prefix, "/"),
 		}
 		propfind := internal.PropFind{
+			XMLName:  multiget.XMLName,
 			Prop:     multiget.Prop,
 			AllProp:  multiget.AllProp,
 			PropName: multiget.PropName,
@@ -608,15 +610,17 @@ func (b *backend) propFindAddressObject(ctx context.Context, propfind *internal.
 		internal.GetContentTypeName: internal.PropFindValue(&internal.GetContentType{
 			Type: vcard.MIMEType,
 		}),
-		// TODO: address-data can only be used in REPORT requests
-		addressDataName: func(*internal.RawXMLValue) (interface{}, error) {
+	}
+
+	if n := propfind.XMLName; n == addressBookQueryName || n == addressBookMultigetName {
+		props[addressDataName] = func(*internal.RawXMLValue) (interface{}, error) {
 			var buf bytes.Buffer
 			if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
 				return nil, err
 			}
 
 			return &addressDataResp{Data: buf.Bytes()}, nil
-		},
+		}
 	}
 
 	if ao.ContentLength > 0 {

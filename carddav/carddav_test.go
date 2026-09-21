@@ -401,3 +401,47 @@ func TestPutRaw(t *testing.T) {
 		t.Errorf("Expected the body as sent, got:\n%s", backend.raw)
 	}
 }
+
+type queryBackend struct {
+	testBackend
+}
+
+func (b *queryBackend) QueryAddressObjects(ctx context.Context, path string, query *AddressBookQuery) ([]AddressObject, error) {
+	aos, err := b.ListAddressObjects(ctx, path, &query.DataRequest)
+	if err != nil {
+		return nil, err
+	}
+	return Filter(query, aos)
+}
+
+func TestAddressDataOnlyOnReport(t *testing.T) {
+	handler := Handler{Backend: &queryBackend{}}
+	serve := func(method, body string) string {
+		req := httptest.NewRequest(method, "/user/contacts/default/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Depth", "1")
+		ctx := context.WithValue(req.Context(), currentUserPrincipalKey, "/user/")
+		ctx = context.WithValue(ctx, addressBookPathKey, "/user/contacts/default/")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
+		data, err := io.ReadAll(w.Result().Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	resp := serve("PROPFIND", `<D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`)
+	if !strings.Contains(resp, alicePath) {
+		t.Fatalf("Expected the address object in PROPFIND response:\n%v", resp)
+	} else if strings.Contains(resp, "BEGIN:VCARD") {
+		t.Errorf("Expected no address-data in PROPFIND response:\n%v", resp)
+	}
+
+	resp = serve("REPORT", `<C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+		<D:prop><D:getetag/><C:address-data/></D:prop>
+	</C:addressbook-query>`)
+	if !strings.Contains(resp, "BEGIN:VCARD") {
+		t.Errorf("Expected address-data in REPORT response:\n%v", resp)
+	}
+}
