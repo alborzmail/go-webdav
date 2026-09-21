@@ -79,6 +79,15 @@ type Calendar struct {
 	CTag string
 }
 
+// CalendarUpdate holds the changes of a PROPPATCH request. A nil field is left
+// unchanged, an empty value removes the property.
+type CalendarUpdate struct {
+	Name        *string
+	Description *string
+	Color       *string
+	Timezone    *ical.Calendar
+}
+
 type CalendarCompRequest struct {
 	Name string
 

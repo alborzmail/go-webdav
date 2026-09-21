@@ -44,6 +44,12 @@ type Backend interface {
 	webdav.UserPrincipalBackend
 }
 
+// UpdateBackend is an optional interface a Backend can implement to support
+// PROPPATCH on calendars.
+type UpdateBackend interface {
+	UpdateCalendar(ctx context.Context, path string, update *CalendarUpdate) error
+}
+
 // MultiGetBackend is an optional interface a Backend can implement to fetch
 // the objects of a calendar-multiget in one call. A path missing from the
 // result is reported as not found.
@@ -392,7 +398,7 @@ func (b *backend) Options(r *http.Request) (caps []string, allow []string, err e
 	caps = []string{"calendar-access"}
 
 	if b.resourceTypeAtPath(r.URL.Path) != resourceTypeCalendarObject {
-		return caps, []string{http.MethodOptions, "PROPFIND", "REPORT", "DELETE", "MKCOL"}, nil
+		return caps, []string{http.MethodOptions, "PROPFIND", "PROPPATCH", "REPORT", "DELETE", "MKCOL"}, nil
 	}
 
 	var dataReq CalendarCompRequest
@@ -765,7 +771,59 @@ func (b *backend) propFindAllCalendarObjects(ctx context.Context, propfind *inte
 }
 
 func (b *backend) PropPatch(r *http.Request, update *internal.PropertyUpdate) (*internal.Response, error) {
-	return nil, internal.HTTPErrorf(http.StatusNotImplemented, "caldav: PropPatch not implemented")
+	ub, ok := b.Backend.(UpdateBackend)
+	if !ok || b.resourceTypeAtPath(r.URL.Path) != resourceTypeCalendar {
+		return nil, internal.HTTPErrorf(http.StatusNotImplemented, "caldav: PropPatch not implemented")
+	}
+
+	var cu CalendarUpdate
+	resp, ok, err := internal.NewPropPatchResponse(r.URL.Path, update, func(name xml.Name, raw *internal.RawXMLValue) error {
+		return propPatchCalendar(&cu, name, raw)
+	})
+	if err != nil || !ok {
+		return resp, err
+	}
+	if err := ub.UpdateCalendar(r.Context(), r.URL.Path, &cu); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func propPatchCalendar(cu *CalendarUpdate, name xml.Name, raw *internal.RawXMLValue) error {
+	// TODO handle all properties
+	var (
+		displayName internal.DisplayName
+		desc        calendarDescription
+		color       calendarColor
+		tz          calendarTimezone
+	)
+	var v interface{}
+	switch name {
+	case internal.DisplayNameName:
+		v, cu.Name = &displayName, &displayName.Name
+	case calendarDescriptionName:
+		v, cu.Description = &desc, &desc.Description
+	case calendarColorName:
+		v, cu.Color = &color, &color.Color
+	case calendarTimezoneName:
+		v, cu.Timezone = &tz, ical.NewCalendar()
+	default:
+		return internal.HTTPErrorf(http.StatusNotImplemented, "caldav: PROPPATCH of %v not implemented", name.Local)
+	}
+	if raw == nil {
+		return nil
+	}
+	if err := raw.Decode(v); err != nil {
+		return &internal.HTTPError{http.StatusBadRequest, err}
+	}
+	if name == calendarTimezoneName {
+		cal, err := decodeCalendarTimezone(strings.TrimSpace(tz.Timezone))
+		if err != nil {
+			return err
+		}
+		cu.Timezone = cal
+	}
+	return nil
 }
 
 func (b *backend) Put(w http.ResponseWriter, r *http.Request) error {

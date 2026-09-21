@@ -1122,9 +1122,94 @@ func TestDecodeCalendarTimezone(t *testing.T) {
 	}
 }
 
+var propPatchRequest = `
+<?xml version="1.0" encoding="utf-8" ?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:A="http://apple.com/ns/ical/">
+  <D:set>
+    <D:prop>
+      <D:displayname>Renamed</D:displayname>
+      <A:calendar-color>#FF2968</A:calendar-color>%s
+    </D:prop>
+  </D:set>
+  <D:remove>
+    <D:prop>
+      <C:calendar-description/>
+    </D:prop>
+  </D:remove>
+</D:propertyupdate>
+`
+
+func TestPropPatchCalendar(t *testing.T) {
+	backend := &testBackend{}
+	handler := Handler{Backend: backend}
+
+	req := httptest.NewRequest("PROPPATCH", "/user/calendars/default/", strings.NewReader(fmt.Sprintf(propPatchRequest, "")))
+	req.Header.Set("Content-Type", "application/xml")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := string(data)
+	if res.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("unexpected status code: %d", res.StatusCode)
+	} else if strings.Count(resp, "<status>") != 1 || !strings.Contains(resp, "<status>HTTP/1.1 200 OK</status>") {
+		t.Fatalf("want a single 200 propstat:\n%v", resp)
+	}
+	update := backend.updates["/user/calendars/default/"]
+	if update == nil {
+		t.Fatalf("want the calendar updated")
+	} else if update.Name == nil || *update.Name != "Renamed" {
+		t.Errorf("unexpected name: %v", update.Name)
+	} else if update.Color == nil || *update.Color != "#FF2968" {
+		t.Errorf("unexpected color: %v", update.Color)
+	} else if update.Description == nil || *update.Description != "" {
+		t.Errorf("want the description removed: %v", update.Description)
+	} else if update.Timezone != nil {
+		t.Errorf("want the timezone unchanged")
+	}
+}
+
+func TestPropPatchCalendarFailedDependency(t *testing.T) {
+	backend := &testBackend{}
+	handler := Handler{Backend: backend}
+
+	body := fmt.Sprintf(propPatchRequest, "<D:getetag>1</D:getetag>")
+	req := httptest.NewRequest("PROPPATCH", "/user/calendars/default/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/xml")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := string(data)
+	if strings.Contains(resp, "200 OK") || !strings.Contains(resp, "424 Failed Dependency") {
+		t.Fatalf("want the other properties to fail:\n%v", resp)
+	} else if len(backend.updates) != 0 {
+		t.Fatalf("want no update applied")
+	}
+}
+
 type testBackend struct {
 	calendars []Calendar
 	objectMap map[string][]CalendarObject
+	updates   map[string]*CalendarUpdate
+}
+
+func (t *testBackend) UpdateCalendar(ctx context.Context, path string, update *CalendarUpdate) error {
+	if t.updates == nil {
+		t.updates = make(map[string]*CalendarUpdate)
+	}
+	t.updates[path] = update
+	return nil
 }
 
 func (t *testBackend) CreateCalendar(ctx context.Context, calendar *Calendar) error {

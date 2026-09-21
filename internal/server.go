@@ -250,6 +250,57 @@ func (h *Handler) handleProppatch(w http.ResponseWriter, r *http.Request) error 
 	return ServeMultiStatus(w, ms)
 }
 
+// PropPatchFunc applies a single property of a PROPPATCH request. raw is nil
+// if the property is removed.
+type PropPatchFunc func(name xml.Name, raw *RawXMLValue) error
+
+// NewPropPatchResponse calls f for each property of update, removals first.
+// If f fails for any property the others are reported as failed dependencies
+// and ok is false: the update must not be applied.
+func NewPropPatchResponse(path string, update *PropertyUpdate, f PropPatchFunc) (resp *Response, ok bool, err error) {
+	var props []RawXMLValue
+	for _, remove := range update.Remove {
+		props = append(props, remove.Prop.Raw...)
+	}
+	removed := len(props)
+	for _, set := range update.Set {
+		props = append(props, set.Prop.Raw...)
+	}
+
+	ok = true
+	names := make([]xml.Name, 0, len(props))
+	codes := make([]int, 0, len(props))
+	for i := range props {
+		name, isElem := props[i].XMLName()
+		if !isElem {
+			continue
+		}
+		raw := &props[i]
+		if i < removed {
+			raw = nil
+		}
+		code := http.StatusOK
+		if err := f(name, raw); err != nil {
+			code = HTTPErrorFromError(err).Code
+			ok = false
+		}
+		names = append(names, name)
+		codes = append(codes, code)
+	}
+
+	resp = &Response{Hrefs: []Href{Href{Path: path}}}
+	for i, name := range names {
+		code := codes[i]
+		if !ok && code == http.StatusOK {
+			code = http.StatusFailedDependency
+		}
+		if err := resp.EncodeProp(code, NewRawXMLElement(name, nil, nil)); err != nil {
+			return nil, false, err
+		}
+	}
+	return resp, ok, nil
+}
+
 func parseDestination(h http.Header) (*Href, error) {
 	destHref := h.Get("Destination")
 	if destHref == "" {
