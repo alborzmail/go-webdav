@@ -30,6 +30,11 @@ type PutAddressObjectOptions struct {
 }
 
 // Backend is a CardDAV server backend.
+//
+// The AddressDataRequest passed along, inside AddressBookQuery too, says which
+// part of the objects the response carries. It is empty when it carries none,
+// as for PROPFIND, HEAD, or a REPORT asking for getetag alone: the objects can
+// then be returned without Card and Raw.
 type Backend interface {
 	AddressBookHomeSetPath(ctx context.Context) (string, error)
 	ListAddressBooks(ctx context.Context) ([]AddressBook, error)
@@ -165,26 +170,37 @@ func decodeAddressDataReq(addressData *addressDataReq) (*AddressDataRequest, err
 		return nil, internal.HTTPErrorf(http.StatusBadRequest, "carddav: only one of allprop or prop can be specified in address-data")
 	}
 
-	req := &AddressDataRequest{AllProp: addressData.Allprop != nil}
+	// An address-data without prop asks for all of them
+	req := &AddressDataRequest{AllProp: len(addressData.Props) == 0}
 	for _, p := range addressData.Props {
 		req.Props = append(req.Props, p.Name)
 	}
 	return req, nil
 }
 
+// decodeAddressDataProp decodes the address-data of a REPORT, which allprop
+// includes. The result is empty if address-data isn't asked for.
+func decodeAddressDataProp(prop *internal.Prop, allProp *struct{}) (*AddressDataRequest, error) {
+	var addressData addressDataReq
+	if prop == nil {
+		if allProp == nil {
+			return &AddressDataRequest{}, nil
+		}
+	} else if err := prop.Decode(&addressData); internal.IsNotFound(err) {
+		return &AddressDataRequest{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return decodeAddressDataReq(&addressData)
+}
+
 func (h *Handler) handleQuery(r *http.Request, w http.ResponseWriter, query *addressbookQuery) error {
 	var q AddressBookQuery
-	if query.Prop != nil {
-		var addressData addressDataReq
-		if err := query.Prop.Decode(&addressData); err != nil && !internal.IsNotFound(err) {
-			return err
-		}
-		req, err := decodeAddressDataReq(&addressData)
-		if err != nil {
-			return err
-		}
-		q.DataRequest = *req
+	req, err := decodeAddressDataProp(query.Prop, query.AllProp)
+	if err != nil {
+		return err
 	}
+	q.DataRequest = *req
 	q.FilterTest = FilterTest(query.Filter.Test)
 	for _, el := range query.Filter.Props {
 		pf, err := decodePropFilter(&el)
@@ -229,18 +245,11 @@ func (h *Handler) handleQuery(r *http.Request, w http.ResponseWriter, query *add
 }
 
 func (h *Handler) handleMultiget(ctx context.Context, w http.ResponseWriter, multiget *addressbookMultiget) error {
-	var dataReq AddressDataRequest
-	if multiget.Prop != nil {
-		var addressData addressDataReq
-		if err := multiget.Prop.Decode(&addressData); err != nil && !internal.IsNotFound(err) {
-			return err
-		}
-		decoded, err := decodeAddressDataReq(&addressData)
-		if err != nil {
-			return err
-		}
-		dataReq = *decoded
+	decoded, err := decodeAddressDataProp(multiget.Prop, multiget.AllProp)
+	if err != nil {
+		return err
 	}
+	dataReq := *decoded
 
 	// Prefetch all objects and index by path for quick lookup in response generation.
 	var lookups map[string]*AddressObject

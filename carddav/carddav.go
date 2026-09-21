@@ -76,6 +76,11 @@ type AddressDataRequest struct {
 	AllProp bool
 }
 
+// IsEmpty reports whether no part of an address object is requested.
+func (req *AddressDataRequest) IsEmpty() bool {
+	return !req.AllProp && len(req.Props) == 0
+}
+
 type PropFilter struct {
 	Name string
 	Test FilterTest // defaults to FilterAnyOf

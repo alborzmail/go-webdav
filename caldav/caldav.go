@@ -109,6 +109,12 @@ type CalendarCompRequest struct {
 	Expand *CalendarExpandRequest
 }
 
+// IsEmpty reports whether no part of a calendar object is requested.
+func (req *CalendarCompRequest) IsEmpty() bool {
+	return req.Name == "" && !req.AllProps && len(req.Props) == 0 &&
+		!req.AllComps && len(req.Comps) == 0 && req.Expand == nil
+}
+
 type CalendarExpandRequest struct {
 	Start, End time.Time
 }

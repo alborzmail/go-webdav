@@ -494,3 +494,72 @@ func TestRawObject(t *testing.T) {
 		t.Errorf("Expected Card encoded for a partial address-data:\n%s", resp)
 	}
 }
+
+type dataReqBackend struct {
+	testBackend
+	reqs []AddressDataRequest
+}
+
+func (b *dataReqBackend) objects(req *AddressDataRequest) []AddressObject {
+	b.reqs = append(b.reqs, *req)
+	ao := AddressObject{Path: "/user/contacts/default/alice.vcf", ETag: "191382932849"}
+	if !req.IsEmpty() {
+		ao.Raw = []byte(aliceData)
+	}
+	return []AddressObject{ao}
+}
+
+func (b *dataReqBackend) ListAddressObjects(ctx context.Context, path string, req *AddressDataRequest) ([]AddressObject, error) {
+	return b.objects(req), nil
+}
+
+func (b *dataReqBackend) GetAddressObjects(ctx context.Context, paths []string, req *AddressDataRequest) ([]AddressObject, error) {
+	return b.objects(req), nil
+}
+
+func (b *dataReqBackend) QueryAddressObjects(ctx context.Context, path string, query *AddressBookQuery) ([]AddressObject, error) {
+	return b.objects(&query.DataRequest), nil
+}
+
+func TestObjectsWithoutData(t *testing.T) {
+	backend := &dataReqBackend{}
+	for _, tc := range []struct {
+		name, method, body string
+		wantData           bool
+	}{
+		{"propfind", "PROPFIND", `<D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`, false},
+		{"multiget", "REPORT", `<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+			<D:prop><D:getetag/></D:prop><D:href>/user/contacts/default/alice.vcf</D:href></C:addressbook-multiget>`, false},
+		{"query", "REPORT", `<C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+			<D:prop><D:getetag/></D:prop></C:addressbook-query>`, false},
+		{"query-data", "REPORT", `<C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+			<D:prop><D:getetag/><C:address-data/></D:prop></C:addressbook-query>`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend.reqs = nil
+			req := httptest.NewRequest(tc.method, "/user/contacts/default/", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/xml")
+			req.Header.Set("Depth", "1")
+			ctx := context.WithValue(req.Context(), currentUserPrincipalKey, "/user/")
+			ctx = context.WithValue(ctx, addressBookPathKey, "/user/contacts/default/")
+			w := httptest.NewRecorder()
+			(&Handler{Backend: backend}).ServeHTTP(w, req.WithContext(ctx))
+
+			data, err := io.ReadAll(w.Result().Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp := string(data)
+			if !strings.Contains(resp, "191382932849") {
+				t.Errorf("Expected the object's ETag in response:\n%v", resp)
+			}
+			if len(backend.reqs) != 1 {
+				t.Fatalf("Expected 1 request for objects, got %d", len(backend.reqs))
+			} else if got := !backend.reqs[0].IsEmpty(); got != tc.wantData {
+				t.Errorf("Expected data requested: %v, got %+v", tc.wantData, backend.reqs[0])
+			} else if got := strings.Contains(resp, "BEGIN:VCARD"); got != tc.wantData {
+				t.Errorf("Expected data in response: %v, got:\n%v", tc.wantData, resp)
+			}
+		})
+	}
+}

@@ -1315,6 +1315,80 @@ func TestEncodeCompFilterIsNotDefined(t *testing.T) {
 	}
 }
 
+type dataReqBackend struct {
+	*testBackend
+	reqs []CalendarCompRequest
+}
+
+func (b *dataReqBackend) ListCalendarObjects(ctx context.Context, path string, req *CalendarCompRequest) ([]CalendarObject, error) {
+	b.reqs = append(b.reqs, *req)
+	return b.testBackend.ListCalendarObjects(ctx, path, req)
+}
+
+func (b *dataReqBackend) GetCalendarObjects(ctx context.Context, paths []string, req *CalendarCompRequest) ([]CalendarObject, error) {
+	b.reqs = append(b.reqs, *req)
+	return b.testBackend.GetCalendarObjects(ctx, paths, req)
+}
+
+func (b *dataReqBackend) QueryCalendarObjects(ctx context.Context, path string, query *CalendarQuery) ([]CalendarObject, error) {
+	b.reqs = append(b.reqs, query.CompRequest)
+	return b.testBackend.ListCalendarObjects(ctx, path, &query.CompRequest)
+}
+
+func TestObjectsWithoutData(t *testing.T) {
+	const calendarPath = "/user/calendars/default/"
+	const path = calendarPath + "event.ics"
+	backend := &dataReqBackend{testBackend: &testBackend{
+		calendars: []Calendar{{Path: calendarPath}},
+		objectMap: map[string][]CalendarObject{
+			calendarPath: []CalendarObject{{Path: path, ETag: "191382932849", ContentLength: 42}},
+		},
+	}}
+
+	for _, tc := range []struct {
+		name, method, body string
+		wantData           bool
+	}{
+		{"propfind", "PROPFIND", propFindAllProp, false},
+		{"multiget", "REPORT", `<C:calendar-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+			<D:prop><D:getetag/></D:prop><D:href>` + path + `</D:href></C:calendar-multiget>`, false},
+		{"query", "REPORT", `<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+			<D:prop><D:getetag/></D:prop><C:filter><C:comp-filter name="VCALENDAR"/></C:filter></C:calendar-query>`, false},
+		{"query-data", "REPORT", `<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+			<D:prop><D:getetag/><C:calendar-data/></D:prop><C:filter><C:comp-filter name="VCALENDAR"/></C:filter></C:calendar-query>`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend.reqs = nil
+			if tc.wantData {
+				cal, err := ical.NewDecoder(strings.NewReader(calendarTestData1)).Decode()
+				if err != nil {
+					t.Fatal(err)
+				}
+				backend.objectMap[calendarPath][0].Data = cal
+			}
+
+			req := httptest.NewRequest(tc.method, calendarPath, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/xml")
+			req.Header.Set("Depth", "1")
+			w := httptest.NewRecorder()
+			(&Handler{Backend: backend}).ServeHTTP(w, req)
+
+			data, err := io.ReadAll(w.Result().Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp := string(data); !strings.Contains(resp, "191382932849") {
+				t.Errorf("want the object's ETag in response:\n%v", resp)
+			}
+			if len(backend.reqs) != 1 {
+				t.Fatalf("want 1 request for objects, got %d", len(backend.reqs))
+			} else if got := !backend.reqs[0].IsEmpty(); got != tc.wantData {
+				t.Errorf("want data requested: %v, got %+v", tc.wantData, backend.reqs[0])
+			}
+		})
+	}
+}
+
 func TestRawObject(t *testing.T) {
 	// The encoder would sort the properties
 	const raw = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//raw//EN\r\nBEGIN:VEVENT\r\nUID:raw\r\n" +

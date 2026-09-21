@@ -32,6 +32,11 @@ type PutCalendarObjectOptions struct {
 }
 
 // Backend is a CalDAV server backend.
+//
+// The CalendarCompRequest passed along, inside CalendarQuery too, says which
+// part of the objects the response carries. It is empty when it carries none,
+// as for PROPFIND, HEAD, or a REPORT asking for getetag alone: the objects can
+// then be returned without Data and Raw.
 type Backend interface {
 	CalendarHomeSetPath(ctx context.Context) (string, error)
 
@@ -272,9 +277,30 @@ func decodeCalendarDataReq(calendarData *calendarDataReq) (*CalendarCompRequest,
 	return decodeComp(calendarData.Comp)
 }
 
+// decodeCalendarDataProp decodes the calendar-data of a REPORT, which allprop
+// includes. The result is empty if calendar-data isn't asked for.
+func decodeCalendarDataProp(prop *internal.Prop, allProp *struct{}) (*CalendarCompRequest, error) {
+	var calendarData calendarDataReq
+	if prop == nil {
+		if allProp == nil {
+			return &CalendarCompRequest{}, nil
+		}
+	} else if err := prop.Decode(&calendarData); internal.IsNotFound(err) {
+		return &CalendarCompRequest{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return decodeCalendarDataReq(&calendarData)
+}
+
 func (h *Handler) handleQuery(r *http.Request, w http.ResponseWriter, query *calendarQuery) error {
 	var q CalendarQuery
-	// TODO: calendar-data in query.Prop
+	dataReq, err := decodeCalendarDataProp(query.Prop, query.AllProp)
+	if err != nil {
+		return err
+	}
+	q.CompRequest = *dataReq
+
 	cf, err := decodeCompFilter(&query.Filter.CompFilter)
 	if err != nil {
 		return err
@@ -311,18 +337,11 @@ func (h *Handler) handleQuery(r *http.Request, w http.ResponseWriter, query *cal
 }
 
 func (h *Handler) handleMultiget(ctx context.Context, w http.ResponseWriter, multiget *calendarMultiget) error {
-	var dataReq CalendarCompRequest
-	if multiget.Prop != nil {
-		var calendarData calendarDataReq
-		if err := multiget.Prop.Decode(&calendarData); err != nil && !internal.IsNotFound(err) {
-			return err
-		}
-		decoded, err := decodeCalendarDataReq(&calendarData)
-		if err != nil {
-			return err
-		}
-		dataReq = *decoded
+	decoded, err := decodeCalendarDataProp(multiget.Prop, multiget.AllProp)
+	if err != nil {
+		return err
 	}
+	dataReq := *decoded
 
 	// Prefetch all objects and index by path for quick lookup in response generation.
 	var lookups map[string]*CalendarObject
