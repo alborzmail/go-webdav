@@ -96,6 +96,38 @@ func (val *RawXMLValue) XMLName() (name xml.Name, ok bool) {
 	return xml.Name{}, false
 }
 
+// Bytes encodes the XML value without its namespace declarations: names carry
+// their namespace and the encoder declares it again.
+func (val *RawXMLValue) Bytes() ([]byte, error) {
+	return xml.Marshal(val.withoutNamespaceAttrs())
+}
+
+// DecodeRawXMLBytes decodes an XML value encoded with Bytes.
+func DecodeRawXMLBytes(b []byte) (*RawXMLValue, error) {
+	var val RawXMLValue
+	if err := xml.Unmarshal(b, &val); err != nil {
+		return nil, err
+	}
+	return val.withoutNamespaceAttrs(), nil
+}
+
+func (val *RawXMLValue) withoutNamespaceAttrs() *RawXMLValue {
+	stripped := RawXMLValue{tok: val.tok, out: val.out}
+	if start, ok := val.tok.(xml.StartElement); ok {
+		var attrs []xml.Attr
+		for _, attr := range start.Attr {
+			if attr.Name.Space != "xmlns" && attr.Name != (xml.Name{Local: "xmlns"}) {
+				attrs = append(attrs, attr)
+			}
+		}
+		stripped.tok = xml.StartElement{Name: start.Name, Attr: attrs}
+	}
+	for _, child := range val.children {
+		stripped.children = append(stripped.children, *child.withoutNamespaceAttrs())
+	}
+	return &stripped
+}
+
 // TokenReader returns a stream of tokens for the XML value.
 func (val *RawXMLValue) TokenReader() xml.TokenReader {
 	if val.out != nil {

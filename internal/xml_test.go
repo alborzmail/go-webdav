@@ -72,3 +72,31 @@ func TestRawXMLValue_TokenReader(t *testing.T) {
 		t.Errorf("input doesn't match output:\n%v\nvs.\n%v", rawXML, s)
 	}
 }
+
+func TestRawXMLValue_Bytes(t *testing.T) {
+	const in = `<A:calendar-color xmlns:A="http://apple.com/ns/ical/" symbolic-color="red">#FF2968</A:calendar-color>`
+	const want = `<calendar-color xmlns="http://apple.com/ns/ical/" symbolic-color="red">#FF2968</calendar-color>`
+
+	var rawValue RawXMLValue
+	if err := xml.Unmarshal([]byte(in), &rawValue); err != nil {
+		t.Fatalf("xml.Unmarshal() = %v", err)
+	}
+	b, err := rawValue.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes() = %v", err)
+	} else if string(b) != want {
+		t.Errorf("Bytes() = \n%s\n but want: \n%s", b, want)
+	}
+
+	// The namespace must not be declared twice once encoded again
+	decoded, err := DecodeRawXMLBytes(b)
+	if err != nil {
+		t.Fatalf("DecodeRawXMLBytes() = %v", err)
+	}
+	b, err = xml.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("xml.Marshal() = %v", err)
+	} else if string(b) != want {
+		t.Errorf("xml.Marshal() = \n%s\n but want: \n%s", b, want)
+	}
+}
