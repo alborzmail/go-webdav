@@ -67,7 +67,7 @@ func Filter(query *AddressBookQuery, aos []AddressObject) ([]AddressObject, erro
 
 // Match reports whether the provided AddressObject matches the query.
 func Match(query *AddressBookQuery, ao *AddressObject) (matched bool, err error) {
-	if query == nil {
+	if query == nil || len(query.PropFilters) == 0 {
 		return true, nil
 	}
 

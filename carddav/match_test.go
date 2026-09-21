@@ -276,6 +276,12 @@ END:VCARD`)
 			want:  true,
 		},
 		{
+			name:  "no-filter",
+			query: &AddressBookQuery{},
+			addr:  alice,
+			want:  true,
+		},
+		{
 			name: "match-email-contains",
 			query: &AddressBookQuery{
 				DataRequest: AddressDataRequest{
