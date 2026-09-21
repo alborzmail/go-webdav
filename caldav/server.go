@@ -25,6 +25,10 @@ type PutCalendarObjectOptions struct {
 	// IfMatch provides the ETag of the resource that the client intends
 	// to overwrite, can be ""
 	IfMatch webdav.ConditionalMatch
+	// Raw is the request body as the client sent it, set by the server only.
+	// A backend storing it unchanged can return a strong ETag (RFC 4791
+	// section 5.3.4).
+	Raw []byte
 }
 
 // Backend is a CalDAV server backend.
@@ -892,7 +896,11 @@ func (b *backend) Put(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// TODO: check CALDAV:max-resource-size precondition
-	cal, err := ical.NewDecoder(r.Body).Decode()
+	opts.Raw, err = internal.ReadRequestBody(r)
+	if err != nil {
+		return err
+	}
+	cal, err := ical.NewDecoder(bytes.NewReader(opts.Raw)).Decode()
 	if err != nil {
 		// TODO: send CALDAV:valid-calendar-data error
 		return internal.HTTPErrorf(http.StatusBadRequest, "caldav: failed to parse iCalendar: %v", err)

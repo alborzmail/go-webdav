@@ -1253,6 +1253,32 @@ func TestDeadProperties(t *testing.T) {
 	}
 }
 
+func TestPutRaw(t *testing.T) {
+	// Lines are folded where the encoder wouldn't
+	body := strings.Replace(calendarTestData1, "SUMMARY:", "SUMMARY:\r\n ", 1)
+	backend := &testBackend{}
+	handler := Handler{Backend: backend}
+
+	req := httptest.NewRequest(http.MethodPut, "/user/calendars/default/event.ics", strings.NewReader(body))
+	req.Header.Set("Content-Type", ical.MIMEType)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if sc := w.Result().StatusCode; sc != http.StatusCreated {
+		t.Fatalf("unexpected status code: %d", sc)
+	} else if string(backend.put) != body {
+		t.Errorf("want the body as sent, got:\n%s", backend.put)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/user/calendars/default/event.ics", strings.NewReader(body))
+	req.Header.Set("Content-Type", ical.MIMEType)
+	w = httptest.NewRecorder()
+	req.Body = http.MaxBytesReader(w, req.Body, 16)
+	handler.ServeHTTP(w, req)
+	if sc := w.Result().StatusCode; sc != http.StatusRequestEntityTooLarge {
+		t.Errorf("unexpected status code for a body past the limit: %d", sc)
+	}
+}
+
 type conditionalDeleteBackend struct {
 	*testBackend
 	ifMatch webdav.ConditionalMatch
@@ -1302,6 +1328,7 @@ type testBackend struct {
 	objectMap map[string][]CalendarObject
 	updates   map[string]*CalendarUpdate
 	deleted   []string
+	put       []byte
 }
 
 func (t *testBackend) UpdateCalendar(ctx context.Context, path string, update *CalendarUpdate) error {
@@ -1365,7 +1392,8 @@ func (t *testBackend) GetCalendarObjects(ctx context.Context, paths []string, re
 }
 
 func (t *testBackend) PutCalendarObject(ctx context.Context, path string, calendar *ical.Calendar, opts *PutCalendarObjectOptions) (*CalendarObject, error) {
-	return nil, nil
+	t.put = opts.Raw
+	return &CalendarObject{Path: path}, nil
 }
 
 func (t *testBackend) ListCalendarObjects(ctx context.Context, path string, req *CalendarCompRequest) ([]CalendarObject, error) {

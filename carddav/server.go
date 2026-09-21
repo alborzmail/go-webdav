@@ -23,6 +23,10 @@ type PutAddressObjectOptions struct {
 	// IfMatch provides the ETag of the resource that the client intends
 	// to overwrite, can be ""
 	IfMatch webdav.ConditionalMatch
+	// Raw is the request body as the client sent it, set by the server only.
+	// A backend storing it unchanged can return a strong ETag (RFC 6352
+	// section 6.3.2.3).
+	Raw []byte
 }
 
 // Backend is a CardDAV server backend.
@@ -778,7 +782,11 @@ func (b *backend) Put(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// TODO: check CARDDAV:max-resource-size precondition
-	card, err := vcard.NewDecoder(r.Body).Decode()
+	opts.Raw, err = internal.ReadRequestBody(r)
+	if err != nil {
+		return err
+	}
+	card, err := vcard.NewDecoder(bytes.NewReader(opts.Raw)).Decode()
 	if err != nil {
 		// TODO: send CARDDAV:valid-address-data error
 		return internal.HTTPErrorf(http.StatusBadRequest, "carddav: failed to parse vCard: %v", err)

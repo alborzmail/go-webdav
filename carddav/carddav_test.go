@@ -378,3 +378,26 @@ func TestDeleteIfMatch(t *testing.T) {
 		t.Errorf("Expected DeleteAddressObject left alone")
 	}
 }
+
+type putBackend struct {
+	testBackend
+	raw []byte
+}
+
+func (b *putBackend) PutAddressObject(ctx context.Context, path string, card vcard.Card, opts *PutAddressObjectOptions) (*AddressObject, error) {
+	b.raw = opts.Raw
+	return &AddressObject{Path: path}, nil
+}
+
+func TestPutRaw(t *testing.T) {
+	backend := &putBackend{}
+	req := httptest.NewRequest(http.MethodPut, "/user/contacts/default/alice.vcf", strings.NewReader(aliceData))
+	req.Header.Set("Content-Type", vcard.MIMEType)
+	w := httptest.NewRecorder()
+	(&Handler{Backend: backend}).ServeHTTP(w, req)
+	if sc := w.Result().StatusCode; sc != http.StatusCreated {
+		t.Fatalf("Unexpected status code: %d", sc)
+	} else if string(backend.raw) != aliceData {
+		t.Errorf("Expected the body as sent, got:\n%s", backend.raw)
+	}
+}

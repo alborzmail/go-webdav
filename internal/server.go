@@ -44,6 +44,19 @@ func DecodeXMLRequest(r *http.Request, v interface{}) error {
 	return nil
 }
 
+// ReadRequestBody reads the whole request body. A body cut short by
+// http.MaxBytesReader is reported as too large.
+func ReadRequestBody(r *http.Request) ([]byte, error) {
+	b, err := io.ReadAll(r.Body)
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return nil, &HTTPError{http.StatusRequestEntityTooLarge, err}
+	} else if err != nil {
+		return nil, &HTTPError{http.StatusBadRequest, err}
+	}
+	return b, nil
+}
+
 func IsRequestBodyEmpty(r *http.Request) bool {
 	_, err := r.Body.Read(nil)
 	return err == io.EOF
