@@ -115,18 +115,9 @@ func (h *Handler) handleMkCalendar(w http.ResponseWriter, r *http.Request) error
 			return internal.HTTPErrorf(http.StatusBadRequest, "caldav: error parsing mkcalendar request: %s", err.Error())
 		}
 
-		cal.Name = m.DisplayName
-		cal.Description = m.CalendarDescription
-
-		if d := len(m.SupportedCalendarComponentSet.Comp); d != 0 {
-			cal.SupportedComponentSet = make([]string, len(m.SupportedCalendarComponentSet.Comp))
-			for k, v := range m.SupportedCalendarComponentSet.Comp {
-				cal.SupportedComponentSet[k] = v.Name
-			}
+		if err := decodeMkcolProp(&m.Set.Prop, &cal); err != nil {
+			return err
 		}
-
-		// TODO other props submitted by iOS: calendar-timezone, calendar-color, calendar-free-busy-set, calendar-order
-		// TODO other props which should be handled: max-resource-size
 	}
 
 	if err := h.Backend.CreateCalendar(r.Context(), &cal); err != nil {
@@ -846,25 +837,32 @@ func (b *backend) Mkcol(r *http.Request) error {
 		if !prop.ResourceType.Is(internal.CollectionName) || !prop.ResourceType.Is(calendarName) {
 			return internal.HTTPErrorf(http.StatusBadRequest, "caldav: unexpected resource type")
 		}
-		cal.Name = prop.DisplayName
-		cal.Description = prop.CalendarDescription
-		cal.Color = strings.TrimSpace(prop.CalendarColor)
-
-		if s := strings.TrimSpace(prop.CalendarTimezone); s != "" {
-			tz, err := decodeCalendarTimezone(s)
-			if err != nil {
-				return err
-			}
-			cal.Timezone = tz
-		}
-
-		cal.SupportedComponentSet = make([]string, len(prop.SupportedCalendarComponentSet.Comp))
-		for i, v := range prop.SupportedCalendarComponentSet.Comp {
-			cal.SupportedComponentSet[i] = v.Name
+		if err := decodeMkcolProp(&prop, &cal); err != nil {
+			return err
 		}
 	}
 
 	return b.Backend.CreateCalendar(r.Context(), &cal)
+}
+
+func decodeMkcolProp(prop *mkcolProp, cal *Calendar) error {
+	cal.Name = prop.DisplayName
+	cal.Description = prop.CalendarDescription
+	cal.Color = strings.TrimSpace(prop.CalendarColor)
+
+	if s := strings.TrimSpace(prop.CalendarTimezone); s != "" {
+		tz, err := decodeCalendarTimezone(s)
+		if err != nil {
+			return err
+		}
+		cal.Timezone = tz
+	}
+
+	cal.SupportedComponentSet = make([]string, len(prop.SupportedCalendarComponentSet.Comp))
+	for i, v := range prop.SupportedCalendarComponentSet.Comp {
+		cal.SupportedComponentSet[i] = v.Name
+	}
+	return nil
 }
 
 func decodeCalendarTimezone(s string) (*ical.Calendar, error) {

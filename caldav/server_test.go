@@ -322,6 +322,35 @@ func TestMkCalendar(t *testing.T) {
 	}
 }
 
+func TestMkCalendarProps(t *testing.T) {
+	backend := &testBackend{}
+	handler := Handler{Backend: backend, Prefix: "/dav"}
+
+	req := httptest.NewRequest("MKCALENDAR", "/dav/user/calendars/default/", strings.NewReader(TestMkCalendarReq))
+	req.Header.Set("Content-Type", "application/xml")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if sc := w.Result().StatusCode; sc != http.StatusCreated {
+		t.Fatalf("unexpected status code: %d", sc)
+	} else if len(backend.calendars) != 1 {
+		t.Fatalf("want 1 calendar, got %d", len(backend.calendars))
+	}
+	cal := backend.calendars[0]
+	if cal.Name != "test calendar" {
+		t.Errorf("unexpected name: %q", cal.Name)
+	}
+	if cal.Color != "#FF2968" {
+		t.Errorf("unexpected color: %q", cal.Color)
+	}
+	if cal.Timezone == nil {
+		t.Errorf("want a timezone")
+	}
+	if len(cal.SupportedComponentSet) != 1 || cal.SupportedComponentSet[0] != "VEVENT" {
+		t.Errorf("unexpected component set: %v", cal.SupportedComponentSet)
+	}
+}
+
 var reportCalendarData = `
 <?xml version="1.0" encoding="UTF-8"?>
 <B:calendar-multiget xmlns:A="DAV:" xmlns:B="urn:ietf:params:xml:ns:caldav">
