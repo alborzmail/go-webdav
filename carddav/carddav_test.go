@@ -445,3 +445,52 @@ func TestAddressDataOnlyOnReport(t *testing.T) {
 		t.Errorf("Expected address-data in REPORT response:\n%v", resp)
 	}
 }
+
+type rawBackend struct {
+	testBackend
+	object AddressObject
+}
+
+func (b *rawBackend) GetAddressObject(ctx context.Context, path string, req *AddressDataRequest) (*AddressObject, error) {
+	return &b.object, nil
+}
+
+func TestRawObject(t *testing.T) {
+	// The encoder would sort the properties
+	const raw = "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:raw\r\nN:Gopher;Alice;;;\r\nEMAIL:alice@example.com\r\nFN:Alice Gopher\r\nEND:VCARD\r\n"
+	const path = "/user/contacts/default/raw.vcf"
+	card, err := vcard.NewDecoder(strings.NewReader(raw)).Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &rawBackend{object: AddressObject{Path: path, ETag: "1", Raw: []byte(raw)}}
+	serve := func(method, body string) string {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/xml")
+		w := httptest.NewRecorder()
+		// Embedding the interface hides testBackend.GetAddressObjects
+		(&Handler{Backend: struct{ Backend }{backend}}).ServeHTTP(w, req)
+		data, err := io.ReadAll(w.Result().Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	multiget := func(addressData string) string {
+		return serve("REPORT", `<C:addressbook-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+			<D:prop>`+addressData+`</D:prop><D:href>`+path+`</D:href></C:addressbook-multiget>`)
+	}
+
+	if resp := serve(http.MethodGet, ""); resp != raw {
+		t.Errorf("Expected the object as stored, got:\n%s", resp)
+	}
+	if resp := multiget(`<C:address-data/>`); !strings.Contains(resp, "UID:raw&#xD;&#xA;N:Gopher") {
+		t.Errorf("Expected the object as stored in address-data:\n%s", resp)
+	}
+
+	backend.object.Card = card
+	resp := multiget(`<C:address-data><C:prop name="FN"/></C:address-data>`)
+	if strings.Contains(resp, "UID:raw&#xD;&#xA;N:Gopher") || !strings.Contains(resp, "FN:Alice Gopher") {
+		t.Errorf("Expected Card encoded for a partial address-data:\n%s", resp)
+	}
+}

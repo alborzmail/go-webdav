@@ -156,6 +156,10 @@ type CalendarObject struct {
 	ContentLength int64
 	ETag          string
 	Data          *ical.Calendar
+	// Raw, when set by a backend, is the object as stored. The server sends
+	// it instead of encoding Data wherever the whole object is asked for, so
+	// that ETag names the bytes a client gets. Data can then be left nil.
+	Raw []byte
 }
 
 // SyncQuery is the query struct represents a sync-collection request

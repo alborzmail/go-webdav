@@ -200,6 +200,15 @@ type calendarDataReq struct {
 	// TODO: limit-recurrence-set, limit-freebusy-set
 }
 
+// isWhole reports whether the calendar object is asked for as it is stored.
+func (req *calendarDataReq) isWhole() bool {
+	if req.Expand != nil {
+		return false
+	}
+	c := req.Comp
+	return c == nil || (c.Allprop != nil && c.Allcomp != nil)
+}
+
 // https://tools.ietf.org/html/rfc4791#section-9.6.1
 type comp struct {
 	XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav comp"`

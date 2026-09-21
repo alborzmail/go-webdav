@@ -373,10 +373,14 @@ func (b *backend) HeadGet(w http.ResponseWriter, r *http.Request) error {
 		w.Header().Set("Last-Modified", ao.ModTime.UTC().Format(http.TimeFormat))
 	}
 
-	if r.Method != http.MethodHead {
-		return vcard.NewEncoder(w).Encode(ao.Card)
+	if r.Method == http.MethodHead {
+		return nil
 	}
-	return nil
+	if ao.Raw != nil {
+		_, err := w.Write(ao.Raw)
+		return err
+	}
+	return vcard.NewEncoder(w).Encode(ao.Card)
 }
 
 func (b *backend) PropFind(r *http.Request, propfind *internal.PropFind, depth internal.Depth) (*internal.MultiStatus, error) {
@@ -613,7 +617,15 @@ func (b *backend) propFindAddressObject(ctx context.Context, propfind *internal.
 	}
 
 	if n := propfind.XMLName; n == addressBookQueryName || n == addressBookMultigetName {
-		props[addressDataName] = func(*internal.RawXMLValue) (interface{}, error) {
+		props[addressDataName] = func(raw *internal.RawXMLValue) (interface{}, error) {
+			var req addressDataReq
+			if err := raw.Decode(&req); err != nil {
+				return nil, &internal.HTTPError{http.StatusBadRequest, err}
+			}
+			if ao.Raw != nil && (ao.Card == nil || len(req.Props) == 0) {
+				return &addressDataResp{Data: ao.Raw}, nil
+			}
+
 			var buf bytes.Buffer
 			if err := vcard.NewEncoder(&buf).Encode(ao.Card); err != nil {
 				return nil, err

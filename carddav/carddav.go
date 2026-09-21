@@ -127,6 +127,10 @@ type AddressObject struct {
 	ContentLength int64
 	ETag          string
 	Card          vcard.Card
+	// Raw, when set by a backend, is the object as stored. The server sends
+	// it instead of encoding Card wherever the whole object is asked for, so
+	// that ETag names the bytes a client gets. Card can then be left nil.
+	Raw []byte
 }
 
 // SyncQuery is the query struct represents a sync-collection request

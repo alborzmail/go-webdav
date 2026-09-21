@@ -1283,6 +1283,48 @@ func TestEncodeCompFilterIsNotDefined(t *testing.T) {
 	}
 }
 
+func TestRawObject(t *testing.T) {
+	// The encoder would sort the properties
+	const raw = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//raw//EN\r\nBEGIN:VEVENT\r\nUID:raw\r\n" +
+		"DTSTAMP:20060206T001102Z\r\nDTSTART:20060102T100000Z\r\nSUMMARY:Raw\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	const path = "/user/calendars/default/raw.ics"
+	cal, err := ical.NewDecoder(strings.NewReader(raw)).Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &testBackend{objectMap: map[string][]CalendarObject{
+		"/user/calendars/default/": []CalendarObject{{Path: path, ETag: "1", Raw: []byte(raw)}},
+	}}
+	serve := func(method, body string) string {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/xml")
+		w := httptest.NewRecorder()
+		(&Handler{Backend: backend}).ServeHTTP(w, req)
+		data, err := io.ReadAll(w.Result().Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	multiget := func(calendarData string) string {
+		return serve("REPORT", `<C:calendar-multiget xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+			<D:prop>`+calendarData+`</D:prop><D:href>`+path+`</D:href></C:calendar-multiget>`)
+	}
+
+	if resp := serve(http.MethodGet, ""); resp != raw {
+		t.Errorf("want the object as stored, got:\n%s", resp)
+	}
+	if resp := multiget(`<C:calendar-data/>`); !strings.Contains(resp, "VERSION:2.0&#xD;&#xA;PRODID:-//raw//EN") {
+		t.Errorf("want the object as stored in calendar-data:\n%s", resp)
+	}
+
+	backend.objectMap["/user/calendars/default/"][0].Data = cal
+	resp := multiget(`<C:calendar-data><C:comp name="VCALENDAR"><C:prop name="VERSION"/></C:comp></C:calendar-data>`)
+	if strings.Contains(resp, "VERSION:2.0&#xD;&#xA;PRODID:-//raw//EN") || !strings.Contains(resp, "PRODID:-//raw//EN&#xD;&#xA;VERSION:2.0") {
+		t.Errorf("want Data encoded for a partial calendar-data:\n%s", resp)
+	}
+}
+
 func TestPutRaw(t *testing.T) {
 	// Lines are folded where the encoder wouldn't
 	body := strings.Replace(calendarTestData1, "SUMMARY:", "SUMMARY:\r\n ", 1)

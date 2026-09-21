@@ -451,10 +451,14 @@ func (b *backend) HeadGet(w http.ResponseWriter, r *http.Request) error {
 		w.Header().Set("Last-Modified", co.ModTime.UTC().Format(http.TimeFormat))
 	}
 
-	if r.Method != http.MethodHead {
-		return ical.NewEncoder(w).Encode(co.Data)
+	if r.Method == http.MethodHead {
+		return nil
 	}
-	return nil
+	if co.Raw != nil {
+		_, err := w.Write(co.Raw)
+		return err
+	}
+	return ical.NewEncoder(w).Encode(co.Data)
 }
 
 func (b *backend) PropFind(r *http.Request, propfind *internal.PropFind, depth internal.Depth) (*internal.MultiStatus, error) {
@@ -737,7 +741,15 @@ func (b *backend) propFindCalendarObject(ctx context.Context, propfind *internal
 	}
 
 	if n := propfind.XMLName; n == calendarQueryName || n == calendarMultigetName {
-		props[calendarDataName] = func(*internal.RawXMLValue) (interface{}, error) {
+		props[calendarDataName] = func(raw *internal.RawXMLValue) (interface{}, error) {
+			var req calendarDataReq
+			if err := raw.Decode(&req); err != nil {
+				return nil, &internal.HTTPError{http.StatusBadRequest, err}
+			}
+			if co.Raw != nil && (co.Data == nil || req.isWhole()) {
+				return &calendarDataResp{Data: co.Raw}, nil
+			}
+
 			var buf bytes.Buffer
 			if err := ical.NewEncoder(&buf).Encode(co.Data); err != nil {
 				return nil, err
