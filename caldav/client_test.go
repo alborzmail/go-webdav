@@ -3,9 +3,11 @@ package caldav
 import (
 	"context"
 	"encoding/xml"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/emersion/go-webdav"
@@ -91,5 +93,52 @@ func TestUpdateCalendarRefused(t *testing.T) {
 	}
 	if len(backend.updates) != 0 {
 		t.Errorf("backend updated: %v", backend.updates)
+	}
+}
+
+// TestSyncCollection verifies a sync hands over objects as the server sent
+// them, deletions, and the token a truncated answer continues from.
+func TestSyncCollection(t *testing.T) {
+	const data = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//t//EN\r\nEND:VCALENDAR\r\n"
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusMultiStatus)
+		io.WriteString(w, `<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+ <D:response><D:href>/cal/a.ics</D:href><D:propstat><D:prop><D:getetag>W/"a1"</D:getetag>
+  <C:calendar-data>BEGIN:VCALENDAR&#13;
+VERSION:2.0&#13;
+PRODID:-//t//t//EN&#13;
+END:VCALENDAR&#13;
+</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+ <D:response><D:href>/cal/b.ics</D:href><D:status>HTTP/1.1 404 Not Found</D:status></D:response>
+ <D:response><D:href>/cal/</D:href><D:status>HTTP/1.1 507 Insufficient Storage</D:status></D:response>
+ <D:sync-token>t2</D:sync-token>
+</D:multistatus>`)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(http.DefaultClient, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := c.SyncCollection(context.Background(), "/cal/", &SyncQuery{SyncToken: "t1"})
+	if err != nil {
+		t.Fatalf("SyncCollection: %v", err)
+	}
+	if !strings.Contains(body, "<sync-token>t1</sync-token>") {
+		t.Errorf("request did not carry the token:\n%s", body)
+	}
+	if got.SyncToken != "t2" || !got.Truncated || !reflect.DeepEqual(got.Deleted, []string{"/cal/b.ics"}) {
+		t.Errorf("sync = %+v, want token t2, truncated, /cal/b.ics deleted", got)
+	}
+	if len(got.Updated) != 1 {
+		t.Fatalf("updated %d objects, want 1", len(got.Updated))
+	}
+	if o := got.Updated[0]; o.Path != "/cal/a.ics" || o.ETag != `W/"a1"` || string(o.Raw) != data || o.Data == nil {
+		t.Errorf("updated %+v", o)
 	}
 }

@@ -439,6 +439,7 @@ func decodeCalendarObjectList(ms *internal.MultiStatus) ([]CalendarObject, error
 			ContentLength: getContentLength.Length,
 			ETag:          getETag.ETag,
 			Data:          data,
+			Raw:           calData.Data,
 		})
 	}
 
@@ -629,18 +630,23 @@ func (c *Client) SyncCollection(ctx context.Context, path string, query *SyncQue
 	var errs []error
 	for _, resp := range ms.Responses {
 		p, err := resp.Path()
+		self := p == path || path == fmt.Sprintf("%s/", p)
 		if err != nil {
 			var httpErr *internal.HTTPError
-			hasStatus := errors.As(err, &httpErr)
-			if !hasStatus || httpErr.Code != http.StatusNotFound {
+			switch {
+			case !errors.As(err, &httpErr):
 				errs = append(errs, err)
-				continue
+			case httpErr.Code == http.StatusNotFound:
+				ret.Deleted = append(ret.Deleted, p)
+			case httpErr.Code == http.StatusInsufficientStorage && self:
+				ret.Truncated = true
+			default:
+				errs = append(errs, err)
 			}
-			ret.Deleted = append(ret.Deleted, p)
 			continue
 		}
 
-		if p == path || path == fmt.Sprintf("%s/", p) {
+		if self {
 			continue
 		}
 
@@ -670,7 +676,7 @@ func (c *Client) SyncCollection(ctx context.Context, path string, query *SyncQue
 			if err != nil {
 				return nil, err
 			}
-			o.Data = cal
+			o.Data, o.Raw = cal, calData.Data
 		} else if !internal.IsNotFound(err) {
 			return nil, err
 		}

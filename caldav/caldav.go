@@ -168,6 +168,7 @@ type CalendarObject struct {
 	// Raw, when set by a backend, is the object as stored. The server sends
 	// it instead of encoding Data wherever the whole object is asked for, so
 	// that ETag names the bytes a client gets. Data can then be left nil.
+	// The client sets it to the object as the server sent it in a REPORT.
 	Raw []byte
 }
 
@@ -181,6 +182,9 @@ type SyncQuery struct {
 // SyncResponse contains the returned sync-token for next time
 type SyncResponse struct {
 	SyncToken string
+	// Truncated reports that the server sent only part of the changes (RFC
+	// 6578 section 3.6); a sync from SyncToken brings the rest.
+	Truncated bool
 	Updated   []CalendarObject
 	Deleted   []string
 }

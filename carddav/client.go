@@ -364,6 +364,7 @@ func decodeAddressList(ms *internal.MultiStatus) ([]AddressObject, error) {
 			ContentLength: getContentLength.Length,
 			ETag:          getETag.ETag,
 			Card:          card,
+			Raw:           addrData.Data,
 		})
 	}
 
@@ -567,16 +568,23 @@ func (c *Client) SyncCollection(ctx context.Context, path string, query *SyncQue
 	var errs []error
 	for _, resp := range ms.Responses {
 		p, err := resp.Path()
+		self := p == path || path == fmt.Sprintf("%s/", p)
 		if err != nil {
-			if err, ok := err.(*internal.HTTPError); ok && err.Code == http.StatusNotFound {
+			var httpErr *internal.HTTPError
+			switch {
+			case !errors.As(err, &httpErr):
+				errs = append(errs, err)
+			case httpErr.Code == http.StatusNotFound:
 				ret.Deleted = append(ret.Deleted, p)
-			} else {
+			case httpErr.Code == http.StatusInsufficientStorage && self:
+				ret.Truncated = true
+			default:
 				errs = append(errs, err)
 			}
 			continue
 		}
 
-		if p == path || path == fmt.Sprintf("%s/", p) {
+		if self {
 			continue
 		}
 
@@ -595,6 +603,20 @@ func (c *Client) SyncCollection(ctx context.Context, path string, query *SyncQue
 			ModTime: time.Time(getLastMod.LastModified),
 			ETag:    getETag.ETag,
 		}
+
+		// Left out when the server sends no address-data; the caller then
+		// fetches it.
+		var addrData addressDataResp
+		if err := resp.DecodeProp(&addrData); err == nil {
+			card, err := vcard.NewDecoder(bytes.NewReader(addrData.Data)).Decode()
+			if err != nil {
+				return nil, err
+			}
+			o.Card, o.Raw = card, addrData.Data
+		} else if !internal.IsNotFound(err) {
+			return nil, err
+		}
+
 		ret.Updated = append(ret.Updated, o)
 	}
 

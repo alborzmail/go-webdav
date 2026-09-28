@@ -3,11 +3,13 @@ package carddav
 import (
 	"context"
 	"encoding/xml"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
 
+	"github.com/emersion/go-vcard"
 	"github.com/emersion/go-webdav"
 )
 
@@ -86,5 +88,46 @@ func TestClientAddressBookCollections(t *testing.T) {
 	if update == nil || update.Name == nil || *update.Name != name || update.Description == nil || *update.Description != "" ||
 		!reflect.DeepEqual(update.RemovedDeadProperties, []xml.Name{colorName}) {
 		t.Errorf("update %+v, want a rename, the description and the color removed", update)
+	}
+}
+
+// TestSyncCollection verifies a sync hands over cards as the server sent
+// them, deletions, and the token a truncated answer continues from.
+func TestSyncCollection(t *testing.T) {
+	const data = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice\r\nEND:VCARD\r\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusMultiStatus)
+		io.WriteString(w, `<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:A="urn:ietf:params:xml:ns:carddav">
+ <D:response><D:href>/book/a.vcf</D:href><D:propstat><D:prop><D:getetag>"a1"</D:getetag>
+  <A:address-data>BEGIN:VCARD&#13;
+VERSION:4.0&#13;
+FN:Alice&#13;
+END:VCARD&#13;
+</A:address-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+ <D:response><D:href>/book/b.vcf</D:href><D:status>HTTP/1.1 404 Not Found</D:status></D:response>
+ <D:response><D:href>/book/</D:href><D:status>HTTP/1.1 507 Insufficient Storage</D:status></D:response>
+ <D:sync-token>t2</D:sync-token>
+</D:multistatus>`)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(http.DefaultClient, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := c.SyncCollection(context.Background(), "/book/", &SyncQuery{SyncToken: "t1"})
+	if err != nil {
+		t.Fatalf("SyncCollection: %v", err)
+	}
+	if got.SyncToken != "t2" || !got.Truncated || !reflect.DeepEqual(got.Deleted, []string{"/book/b.vcf"}) {
+		t.Errorf("sync = %+v, want token t2, truncated, /book/b.vcf deleted", got)
+	}
+	if len(got.Updated) != 1 {
+		t.Fatalf("updated %d cards, want 1", len(got.Updated))
+	}
+	if o := got.Updated[0]; o.Path != "/book/a.vcf" || o.ETag != `"a1"` || string(o.Raw) != data || o.Card.PreferredValue(vcard.FieldFormattedName) != "Alice" {
+		t.Errorf("updated %+v", o)
 	}
 }
