@@ -281,6 +281,13 @@ type mkcolProp struct {
 	Raw                           []internal.RawXMLValue        `xml:",any"`
 }
 
+// mkcalendarRequest is the MKCALENDAR a client sends: only the properties
+// it sets.
+type mkcalendarRequest struct {
+	XMLName xml.Name     `xml:"urn:ietf:params:xml:ns:caldav mkcalendar"`
+	Set     internal.Set `xml:"DAV: set"`
+}
+
 type mkcalendarReq struct {
 	XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav mkcalendar"`
 	Set     mkcolSet `xml:"DAV: set"`

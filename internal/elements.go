@@ -189,29 +189,38 @@ func (resp *Response) DecodeProp(values ...interface{}) error {
 		if err != nil {
 			return err
 		}
-		if err := resp.Err(); err != nil {
+		raw, err := resp.GetProp(name)
+		if err != nil {
+			return err
+		}
+		if err := raw.Decode(v); err != nil {
 			return newPropError(name, err)
 		}
-		for _, propstat := range resp.PropStats {
-			raw := propstat.Prop.Get(name)
-			if raw == nil {
-				continue
-			}
-			if err := propstat.Status.Err(); err != nil {
-				return newPropError(name, err)
-			}
-			if err := raw.Decode(v); err != nil {
-				return newPropError(name, err)
-			}
-			return nil
-		}
-		return newPropError(name, &HTTPError{
-			Code: http.StatusNotFound,
-			Err:  fmt.Errorf("missing property"),
-		})
 	}
 
 	return nil
+}
+
+// GetProp returns the named property as it was sent, failing as DecodeProp
+// does.
+func (resp *Response) GetProp(name xml.Name) (*RawXMLValue, error) {
+	if err := resp.Err(); err != nil {
+		return nil, newPropError(name, err)
+	}
+	for _, propstat := range resp.PropStats {
+		raw := propstat.Prop.Get(name)
+		if raw == nil {
+			continue
+		}
+		if err := propstat.Status.Err(); err != nil {
+			return nil, newPropError(name, err)
+		}
+		return raw, nil
+	}
+	return nil, newPropError(name, &HTTPError{
+		Code: http.StatusNotFound,
+		Err:  fmt.Errorf("missing property"),
+	})
 }
 
 func newPropError(name xml.Name, err error) error {
@@ -484,6 +493,32 @@ type PropertyUpdate struct {
 	Set     []Set    `xml:"set"`
 }
 
+// NewPropertyUpdate encodes a PROPPATCH setting and removing properties.
+func NewPropertyUpdate(set, remove []interface{}) (*PropertyUpdate, error) {
+	var update PropertyUpdate
+	if len(remove) > 0 {
+		prop, err := EncodeProp(remove...)
+		if err != nil {
+			return nil, err
+		}
+		update.Remove = []Remove{{Prop: *prop}}
+	}
+	if len(set) > 0 {
+		prop, err := EncodeProp(set...)
+		if err != nil {
+			return nil, err
+		}
+		update.Set = []Set{{Prop: *prop}}
+	}
+	return &update, nil
+}
+
+// https://tools.ietf.org/html/rfc5689#section-5.1
+type Mkcol struct {
+	XMLName xml.Name `xml:"DAV: mkcol"`
+	Set     Set      `xml:"set"`
+}
+
 // https://tools.ietf.org/html/rfc4918#section-14.23
 type Remove struct {
 	XMLName xml.Name `xml:"DAV: remove"`
@@ -513,15 +548,30 @@ type Limit struct {
 
 // https://tools.ietf.org/html/rfc3744#section-5.4
 type CurrentUserPrivilegeSet struct {
-	XMLName   xml.Name `xml:"DAV: current-user-privilege-set"`
-	Privilege []Privilege
+	XMLName   xml.Name    `xml:"DAV: current-user-privilege-set"`
+	Privilege []Privilege `xml:"DAV: privilege"`
 }
 
 // https://tools.ietf.org/html/rfc3744#section-5.4
 type Privilege struct {
-	XMLName xml.Name  `xml:"DAV: privilege"`
-	Read    *struct{} `xml:"DAV: read,omitempty"`
-	Write   *struct{} `xml:"DAV: write,omitempty"`
+	XMLName      xml.Name  `xml:"DAV: privilege"`
+	Read         *struct{} `xml:"DAV: read,omitempty"`
+	Write        *struct{} `xml:"DAV: write,omitempty"`
+	WriteContent *struct{} `xml:"DAV: write-content,omitempty"`
+	Bind         *struct{} `xml:"DAV: bind,omitempty"`
+	All          *struct{} `xml:"DAV: all,omitempty"`
+}
+
+// ReadOnly reports whether the set grants no privilege to change or add
+// members (RFC 3744 section 3.12). An empty set, which would not even let the
+// user read, is taken to say nothing.
+func (set *CurrentUserPrivilegeSet) ReadOnly() bool {
+	for _, p := range set.Privilege {
+		if p.Write != nil || p.WriteContent != nil || p.Bind != nil || p.All != nil {
+			return false
+		}
+	}
+	return len(set.Privilege) > 0
 }
 
 // NewCurrentUserPrivilegeSet returns a privilege set granting DAV:read, plus

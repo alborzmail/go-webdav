@@ -22,8 +22,11 @@ var calendarProps = []xml.Name{
 	internal.ResourceTypeName,
 	internal.DisplayNameName,
 	calendarDescriptionName,
+	calendarColorName,
 	maxResourceSizeName,
 	supportedCalendarComponentSetName,
+	internal.CurrentUserPrivilegeSetName,
+	internal.GetCTagName,
 }
 
 // DiscoverContextURL performs a DNS-based CardDAV service discovery as
@@ -146,13 +149,137 @@ func decodeCalendar(path string, resp *internal.Response) (*Calendar, error) {
 		compNames = append(compNames, comp.Name)
 	}
 
+	var color calendarColor
+	if err := resp.DecodeProp(&color); err != nil && !internal.IsNotFound(err) {
+		return nil, err
+	}
+
+	// A server which doesn't say is taken to allow writing.
+	var privileges internal.CurrentUserPrivilegeSet
+	readOnly := false
+	if err := resp.DecodeProp(&privileges); err == nil {
+		readOnly = privileges.ReadOnly()
+	} else if !internal.IsNotFound(err) {
+		return nil, err
+	}
+
+	var ctag internal.GetCTag
+	if err := resp.DecodeProp(&ctag); err != nil && !internal.IsNotFound(err) {
+		return nil, err
+	}
+
 	return &Calendar{
 		Path:                  path,
 		Name:                  dispName.Name,
 		Description:           desc.Description,
+		Color:                 strings.TrimSpace(color.Color),
 		MaxResourceSize:       maxResSize.Size,
 		SupportedComponentSet: compNames,
+		ReadOnly:              readOnly,
+		CTag:                  ctag.CTag,
 	}, nil
+}
+
+// CreateCalendar creates a calendar at cal.Path with MKCALENDAR (RFC 4791
+// section 5.3.1), setting its name, description, color, components, timezone
+// and dead properties.
+func (c *Client) CreateCalendar(ctx context.Context, cal *Calendar) error {
+	var props []interface{}
+	if cal.Name != "" {
+		props = append(props, &internal.DisplayName{Name: cal.Name})
+	}
+	if cal.Description != "" {
+		props = append(props, &calendarDescription{Description: cal.Description})
+	}
+	if cal.Color != "" {
+		props = append(props, &calendarColor{Color: cal.Color})
+	}
+	if len(cal.SupportedComponentSet) > 0 {
+		var set supportedCalendarComponentSet
+		for _, name := range cal.SupportedComponentSet {
+			set.Comp = append(set.Comp, comp{Name: name})
+		}
+		props = append(props, &set)
+	}
+	if cal.Timezone != nil {
+		tz, err := encodeCalendarTimezone(cal.Timezone)
+		if err != nil {
+			return err
+		}
+		props = append(props, tz)
+	}
+	dead, err := encodeDeadProperties(cal.DeadProperties)
+	if err != nil {
+		return err
+	}
+	prop, err := internal.EncodeProp(append(props, dead...)...)
+	if err != nil {
+		return err
+	}
+	return c.ic.Mkcol(ctx, "MKCALENDAR", cal.Path, &mkcalendarRequest{Set: internal.Set{Prop: *prop}})
+}
+
+// UpdateCalendar changes the properties of the calendar at path with
+// PROPPATCH.
+func (c *Client) UpdateCalendar(ctx context.Context, path string, update *CalendarUpdate) error {
+	var set, remove []interface{}
+	patch := func(value string, v interface{}) {
+		if value == "" {
+			remove = append(remove, v)
+		} else {
+			set = append(set, v)
+		}
+	}
+	if update.Name != nil {
+		patch(*update.Name, &internal.DisplayName{Name: *update.Name})
+	}
+	if update.Description != nil {
+		patch(*update.Description, &calendarDescription{Description: *update.Description})
+	}
+	if update.Color != nil {
+		patch(*update.Color, &calendarColor{Color: *update.Color})
+	}
+	if update.Timezone != nil && len(update.Timezone.Children) == 0 {
+		remove = append(remove, &calendarTimezone{})
+	} else if update.Timezone != nil {
+		tz, err := encodeCalendarTimezone(update.Timezone)
+		if err != nil {
+			return err
+		}
+		set = append(set, tz)
+	}
+	for _, name := range update.RemovedDeadProperties {
+		remove = append(remove, internal.NewRawXMLElement(name, nil, nil))
+	}
+	dead, err := encodeDeadProperties(update.DeadProperties)
+	if err != nil {
+		return err
+	}
+	pu, err := internal.NewPropertyUpdate(append(set, dead...), remove)
+	if err != nil {
+		return err
+	}
+	return c.ic.PropPatch(ctx, path, pu)
+}
+
+func encodeDeadProperties(dead []webdav.DeadProperty) ([]interface{}, error) {
+	l := make([]interface{}, len(dead))
+	for i, d := range dead {
+		raw, err := internal.DecodeRawXMLBytes(d.XML)
+		if err != nil {
+			return nil, err
+		}
+		l[i] = raw
+	}
+	return l, nil
+}
+
+func encodeCalendarTimezone(cal *ical.Calendar) (*calendarTimezone, error) {
+	var buf bytes.Buffer
+	if err := ical.NewEncoder(&buf).Encode(cal); err != nil {
+		return nil, err
+	}
+	return &calendarTimezone{Timezone: buf.String()}, nil
 }
 
 func encodeCalendarCompReq(c *CalendarCompRequest) (*comp, error) {

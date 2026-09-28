@@ -272,6 +272,53 @@ func (c *Client) Options(ctx context.Context, path string) (classes map[string]b
 	return classes, methods, nil
 }
 
+// PropPatch changes the properties of a resource, failing unless the server
+// changed every one of them (RFC 4918 section 9.2).
+func (c *Client) PropPatch(ctx context.Context, path string, update *PropertyUpdate) error {
+	req, err := c.NewXMLRequest("PROPPATCH", path, update)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Do(req.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMultiStatus {
+		return nil
+	}
+
+	var ms MultiStatus
+	if err := xml.NewDecoder(resp.Body).Decode(&ms); err != nil {
+		return err
+	}
+	for _, r := range ms.Responses {
+		if err := r.Err(); err != nil {
+			return err
+		}
+		for _, propstat := range r.PropStats {
+			if propstat.Status.Code/100 != 2 {
+				return &HTTPError{Code: propstat.Status.Code}
+			}
+		}
+	}
+	return nil
+}
+
+// Mkcol creates a collection with method, MKCOL or one extending it, whose
+// body sets its properties.
+func (c *Client) Mkcol(ctx context.Context, method, path string, body interface{}) error {
+	req, err := c.NewXMLRequest(method, path, body)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Do(req.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
 // SyncCollection perform a `sync-collection` REPORT operation on a resource
 func (c *Client) SyncCollection(ctx context.Context, path, syncToken string, level Depth, limit *Limit, prop *Prop) (*MultiStatus, error) {
 	q := SyncCollectionQuery{

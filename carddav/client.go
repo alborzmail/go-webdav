@@ -3,6 +3,7 @@ package carddav
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"mime"
@@ -77,14 +78,31 @@ func decodeSupportedAddressData(supported *supportedAddressData) []AddressDataTy
 	return l
 }
 
-func (c *Client) FindAddressBooks(ctx context.Context, addressBookHomeSet string) ([]AddressBook, error) {
-	propfind := internal.NewPropNamePropFind(
-		internal.ResourceTypeName,
-		internal.DisplayNameName,
-		addressBookDescriptionName,
-		maxResourceSizeName,
-		supportedAddressDataName,
-	)
+var addressBookProps = []xml.Name{
+	internal.ResourceTypeName,
+	internal.DisplayNameName,
+	addressBookDescriptionName,
+	maxResourceSizeName,
+	supportedAddressDataName,
+	internal.CurrentUserPrivilegeSetName,
+	internal.GetCTagName,
+}
+
+// FindAddressBook reads the address book at path. props names further
+// properties to read, which are returned as DeadProperties.
+func (c *Client) FindAddressBook(ctx context.Context, path string, props ...xml.Name) (*AddressBook, error) {
+	propfind := internal.NewPropNamePropFind(append(addressBookProps, props...)...)
+	resp, err := c.ic.PropFindFlat(ctx, path, propfind)
+	if err != nil {
+		return nil, err
+	}
+	return decodeAddressBook(path, resp, props)
+}
+
+// FindAddressBooks lists the address books in a home set. props names
+// further properties to read, which are returned as DeadProperties.
+func (c *Client) FindAddressBooks(ctx context.Context, addressBookHomeSet string, props ...xml.Name) ([]AddressBook, error) {
+	propfind := internal.NewPropNamePropFind(append(addressBookProps, props...)...)
 	ms, err := c.ic.PropFind(ctx, addressBookHomeSet, internal.DepthOne, propfind)
 	if err != nil {
 		return nil, err
@@ -107,39 +125,143 @@ func (c *Client) FindAddressBooks(ctx context.Context, addressBookHomeSet string
 			continue
 		}
 
-		var desc addressbookDescription
-		if err := resp.DecodeProp(&desc); err != nil && !internal.IsNotFound(err) {
+		ab, err := decodeAddressBook(path, &resp, props)
+		if err != nil {
 			return nil, err
 		}
-
-		var dispName internal.DisplayName
-		if err := resp.DecodeProp(&dispName); err != nil && !internal.IsNotFound(err) {
-			return nil, err
-		}
-
-		var maxResSize maxResourceSize
-		if err := resp.DecodeProp(&maxResSize); err != nil && !internal.IsNotFound(err) {
-			return nil, err
-		}
-		if maxResSize.Size < 0 {
-			return nil, fmt.Errorf("carddav: max-resource-size must be a positive integer")
-		}
-
-		var supported supportedAddressData
-		if err := resp.DecodeProp(&supported); err != nil && !internal.IsNotFound(err) {
-			return nil, err
-		}
-
-		l = append(l, AddressBook{
-			Path:                 path,
-			Name:                 dispName.Name,
-			Description:          desc.Description,
-			MaxResourceSize:      maxResSize.Size,
-			SupportedAddressData: decodeSupportedAddressData(&supported),
-		})
+		l = append(l, *ab)
 	}
 
 	return l, errors.Join(errs...)
+}
+
+func decodeAddressBook(path string, resp *internal.Response, props []xml.Name) (*AddressBook, error) {
+	var desc addressbookDescription
+	if err := resp.DecodeProp(&desc); err != nil && !internal.IsNotFound(err) {
+		return nil, err
+	}
+
+	var dispName internal.DisplayName
+	if err := resp.DecodeProp(&dispName); err != nil && !internal.IsNotFound(err) {
+		return nil, err
+	}
+
+	var maxResSize maxResourceSize
+	if err := resp.DecodeProp(&maxResSize); err != nil && !internal.IsNotFound(err) {
+		return nil, err
+	}
+	if maxResSize.Size < 0 {
+		return nil, fmt.Errorf("carddav: max-resource-size must be a positive integer")
+	}
+
+	var supported supportedAddressData
+	if err := resp.DecodeProp(&supported); err != nil && !internal.IsNotFound(err) {
+		return nil, err
+	}
+
+	// A server which doesn't say is taken to allow writing.
+	var privileges internal.CurrentUserPrivilegeSet
+	readOnly := false
+	if err := resp.DecodeProp(&privileges); err == nil {
+		readOnly = privileges.ReadOnly()
+	} else if !internal.IsNotFound(err) {
+		return nil, err
+	}
+
+	var ctag internal.GetCTag
+	if err := resp.DecodeProp(&ctag); err != nil && !internal.IsNotFound(err) {
+		return nil, err
+	}
+
+	var dead []webdav.DeadProperty
+	for _, name := range props {
+		raw, err := resp.GetProp(name)
+		if internal.IsNotFound(err) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		b, err := raw.Bytes()
+		if err != nil {
+			return nil, err
+		}
+		dead = append(dead, webdav.DeadProperty{Name: name, XML: b})
+	}
+
+	return &AddressBook{
+		Path:                 path,
+		Name:                 dispName.Name,
+		Description:          desc.Description,
+		MaxResourceSize:      maxResSize.Size,
+		SupportedAddressData: decodeSupportedAddressData(&supported),
+		ReadOnly:             readOnly,
+		CTag:                 ctag.CTag,
+		DeadProperties:       dead,
+	}, nil
+}
+
+// CreateAddressBook creates an address book at ab.Path with an extended
+// MKCOL (RFC 5689), setting its name, description and dead properties.
+func (c *Client) CreateAddressBook(ctx context.Context, ab *AddressBook) error {
+	props := []interface{}{internal.NewResourceType(internal.CollectionName, addressBookName)}
+	if ab.Name != "" {
+		props = append(props, &internal.DisplayName{Name: ab.Name})
+	}
+	if ab.Description != "" {
+		props = append(props, &addressbookDescription{Description: ab.Description})
+	}
+	dead, err := encodeDeadProperties(ab.DeadProperties)
+	if err != nil {
+		return err
+	}
+	prop, err := internal.EncodeProp(append(props, dead...)...)
+	if err != nil {
+		return err
+	}
+	return c.ic.Mkcol(ctx, "MKCOL", ab.Path, &internal.Mkcol{Set: internal.Set{Prop: *prop}})
+}
+
+// UpdateAddressBook changes the properties of the address book at path with
+// PROPPATCH.
+func (c *Client) UpdateAddressBook(ctx context.Context, path string, update *AddressBookUpdate) error {
+	var set, remove []interface{}
+	patch := func(value string, v interface{}) {
+		if value == "" {
+			remove = append(remove, v)
+		} else {
+			set = append(set, v)
+		}
+	}
+	if update.Name != nil {
+		patch(*update.Name, &internal.DisplayName{Name: *update.Name})
+	}
+	if update.Description != nil {
+		patch(*update.Description, &addressbookDescription{Description: *update.Description})
+	}
+	for _, name := range update.RemovedDeadProperties {
+		remove = append(remove, internal.NewRawXMLElement(name, nil, nil))
+	}
+	dead, err := encodeDeadProperties(update.DeadProperties)
+	if err != nil {
+		return err
+	}
+	pu, err := internal.NewPropertyUpdate(append(set, dead...), remove)
+	if err != nil {
+		return err
+	}
+	return c.ic.PropPatch(ctx, path, pu)
+}
+
+func encodeDeadProperties(dead []webdav.DeadProperty) ([]interface{}, error) {
+	l := make([]interface{}, len(dead))
+	for i, d := range dead {
+		raw, err := internal.DecodeRawXMLBytes(d.XML)
+		if err != nil {
+			return nil, err
+		}
+		l[i] = raw
+	}
+	return l, nil
 }
 
 func encodeAddressPropReq(req *AddressDataRequest) (*internal.Prop, error) {
