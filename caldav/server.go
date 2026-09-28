@@ -793,7 +793,7 @@ func (b *backend) propFindCalendarObject(ctx context.Context, propfind *internal
 
 	if co.ETag != "" {
 		props[internal.GetETagName] = internal.PropFindValue(&internal.GetETag{
-			ETag: internal.ETag(co.ETag),
+			ETag: internal.ETag(co.ETag).String(),
 		})
 	}
 

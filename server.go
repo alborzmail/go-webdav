@@ -195,7 +195,7 @@ func (b *backend) propFindFile(propfind *internal.PropFind, fi *FileInfo) (*inte
 
 		if fi.ETag != "" {
 			props[internal.GetETagName] = internal.PropFindValue(&internal.GetETag{
-				ETag: internal.ETag(fi.ETag),
+				ETag: internal.ETag(fi.ETag).String(),
 			})
 		}
 	}

@@ -310,7 +310,7 @@ func decodeCalendarObjectList(ms *internal.MultiStatus) ([]CalendarObject, error
 			Path:          path,
 			ModTime:       time.Time(getLastMod.LastModified),
 			ContentLength: getContentLength.Length,
-			ETag:          string(getETag.ETag),
+			ETag:          getETag.ETag,
 			Data:          data,
 		})
 	}
@@ -381,10 +381,6 @@ func populateCalendarObject(co *CalendarObject, h http.Header) error {
 		co.Path = u.Path
 	}
 	if etag := h.Get("ETag"); etag != "" {
-		etag, err := strconv.Unquote(etag)
-		if err != nil {
-			return err
-		}
 		co.ETag = etag
 	}
 	if contentLength := h.Get("Content-Length"); contentLength != "" {
@@ -534,7 +530,7 @@ func (c *Client) SyncCollection(ctx context.Context, path string, query *SyncQue
 		o := CalendarObject{
 			Path:    p,
 			ModTime: time.Time(getLastMod.LastModified),
-			ETag:    string(getETag.ETag),
+			ETag:    getETag.ETag,
 		}
 
 		// Many servers return the calendar-data inline in the sync-collection

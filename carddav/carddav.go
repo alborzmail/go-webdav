@@ -126,6 +126,9 @@ type AddressBookMultiGet struct {
 	DataRequest AddressDataRequest
 }
 
+// AddressObject is an address object resource. Its ETag is an opaque-tag or
+// an entity-tag; the client keeps it as the server sent it, weak or strong,
+// fit for an If-Match header.
 type AddressObject struct {
 	Path          string
 	ModTime       time.Time

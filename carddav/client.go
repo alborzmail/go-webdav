@@ -240,7 +240,7 @@ func decodeAddressList(ms *internal.MultiStatus) ([]AddressObject, error) {
 			Path:          path,
 			ModTime:       time.Time(getLastMod.LastModified),
 			ContentLength: getContentLength.Length,
-			ETag:          string(getETag.ETag),
+			ETag:          getETag.ETag,
 			Card:          card,
 		})
 	}
@@ -324,10 +324,6 @@ func populateAddressObject(ao *AddressObject, h http.Header) error {
 		ao.Path = u.Path
 	}
 	if etag := h.Get("ETag"); etag != "" {
-		etag, err := strconv.Unquote(etag)
-		if err != nil {
-			return err
-		}
 		ao.ETag = etag
 	}
 	if contentLength := h.Get("Content-Length"); contentLength != "" {
@@ -475,7 +471,7 @@ func (c *Client) SyncCollection(ctx context.Context, path string, query *SyncQue
 		o := AddressObject{
 			Path:    p,
 			ModTime: time.Time(getLastMod.LastModified),
-			ETag:    string(getETag.ETag),
+			ETag:    getETag.ETag,
 		}
 		ret.Updated = append(ret.Updated, o)
 	}

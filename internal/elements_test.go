@@ -144,6 +144,16 @@ func TestETag_String(t *testing.T) {
 			etag: "",
 			want: "\"\"",
 		},
+		{
+			name: "entity-tag",
+			etag: "\"162392347123\"",
+			want: "\"162392347123\"",
+		},
+		{
+			name: "weak entity-tag",
+			etag: "W/\"162392347123\"",
+			want: "W/\"162392347123\"",
+		},
 	}
 
 	for _, tt := range tests {

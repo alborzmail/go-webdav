@@ -46,8 +46,8 @@ func TestPutAddressObjectSendsIfMatch(t *testing.T) {
 	if gotIfMatch != `"old-etag"` {
 		t.Errorf("If-Match header = %q, want %q", gotIfMatch, `"old-etag"`)
 	}
-	if ao.ETag != "new-etag" {
-		t.Errorf("returned ETag = %q, want %q", ao.ETag, "new-etag")
+	if ao.ETag != `"new-etag"` {
+		t.Errorf("returned ETag = %q, want %q", ao.ETag, `"new-etag"`)
 	}
 }
 
@@ -74,5 +74,30 @@ func TestPutAddressObjectPreconditionFailed(t *testing.T) {
 	}
 	if code != http.StatusPreconditionFailed {
 		t.Errorf("status code = %d, want %d", code, http.StatusPreconditionFailed)
+	}
+}
+
+// TestGetAddressObjectKeepsAWeakETag verifies a weak ETag, as a compressing
+// proxy in front of Nextcloud sends, is returned as the server sent it.
+func TestGetAddressObjectKeepsAWeakETag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", vcard.MIMEType)
+		w.Header().Set("ETag", `W/"e1"`)
+		if err := vcard.NewEncoder(w).Encode(minimalCard()); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(http.DefaultClient, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ao, err := c.GetAddressObject(context.Background(), "/contacts/test-uid.vcf")
+	if err != nil {
+		t.Fatalf("GetAddressObject: %v", err)
+	}
+	if ao.ETag != `W/"e1"` {
+		t.Errorf("ETag = %q, want %q", ao.ETag, `W/"e1"`)
 	}
 }

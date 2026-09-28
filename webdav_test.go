@@ -67,3 +67,26 @@ func TestConditionalMatchWeak(t *testing.T) {
 		}
 	}
 }
+
+func TestConditionalMatchEntityTag(t *testing.T) {
+	val := ConditionalMatch(`"AAA"`)
+	for _, tc := range []struct {
+		etag         string
+		strong, weak bool
+	}{
+		{`"AAA"`, true, true},
+		{`W/"AAA"`, false, true},
+		{`"BBB"`, false, false},
+	} {
+		if _, ok, err := val.MatchETag(tc.etag); err != nil {
+			t.Fatal(err)
+		} else if ok != tc.strong {
+			t.Errorf("MatchETag(%q) = %v, want %v", tc.etag, ok, tc.strong)
+		}
+		if _, ok, err := val.MatchETagWeak(tc.etag); err != nil {
+			t.Fatal(err)
+		} else if ok != tc.weak {
+			t.Errorf("MatchETagWeak(%q) = %v, want %v", tc.etag, ok, tc.weak)
+		}
+	}
+}

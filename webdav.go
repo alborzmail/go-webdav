@@ -11,7 +11,9 @@ import (
 	"github.com/emersion/go-webdav/internal"
 )
 
-// FileInfo holds information about a WebDAV file.
+// FileInfo holds information about a WebDAV file. Its ETag is an opaque-tag
+// or an entity-tag; the client keeps it as the server sent it, weak or strong,
+// fit for an If-Match header.
 type FileInfo struct {
 	Path     string
 	Size     int64
@@ -83,8 +85,9 @@ func (val ConditionalMatch) ETag() (string, error) {
 // The function returns early if no ETags are set (isSet is false) or if a wildcard (*) is used,
 // in which case all ETags match. For multiple ETags, it checks each one until a match is found or all are checked.
 //
-// The comparison is the strong one If-Match asks for: a weak ETag in the
-// header value never matches (RFC 7232 section 2.3.2).
+// etag may be a bare opaque-tag or an entity-tag. The comparison is the
+// strong one If-Match asks for: a weak ETag on either side never matches
+// (RFC 7232 section 2.3.2).
 func (val ConditionalMatch) MatchETag(etag string) (isSet bool, match bool, err error) {
 	return val.matchETag(etag, false)
 }
@@ -103,6 +106,14 @@ func (val ConditionalMatch) matchETag(etag string, weak bool) (isSet bool, match
 	} else if val.IsWildcard() {
 		return true, true, nil
 	}
+	etag, isWeak := strings.CutPrefix(etag, "W/")
+	if isWeak && !weak {
+		return true, false, nil
+	}
+	var have internal.ETag
+	if err := have.UnmarshalText([]byte(etag)); err != nil {
+		return true, false, err
+	}
 	quoted_etags := strings.Split(string(val), ",")
 	for _, quoted_etag := range quoted_etags {
 		quoted_etag = strings.TrimSpace(quoted_etag)
@@ -117,7 +128,7 @@ func (val ConditionalMatch) matchETag(etag string, weak bool) (isSet bool, match
 			// opinionated returning `false` on match so caller
 			// should definitely check for non-nil `err`
 			return true, false, err
-		} else if string(e) == etag {
+		} else if e == have {
 			return true, true, nil
 		}
 	}

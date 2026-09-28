@@ -2,6 +2,7 @@ package caldav
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -53,8 +54,8 @@ func TestPutCalendarObjectSendsIfMatch(t *testing.T) {
 	if gotIfMatch != `"old-etag"` {
 		t.Errorf("If-Match header = %q, want %q", gotIfMatch, `"old-etag"`)
 	}
-	if co.ETag != "new-etag" {
-		t.Errorf("returned ETag = %q, want %q", co.ETag, "new-etag")
+	if co.ETag != `"new-etag"` {
+		t.Errorf("returned ETag = %q, want %q", co.ETag, `"new-etag"`)
 	}
 }
 
@@ -104,5 +105,67 @@ func TestPutCalendarObjectPreconditionFailed(t *testing.T) {
 	}
 	if code != http.StatusPreconditionFailed {
 		t.Errorf("status code = %d, want %d", code, http.StatusPreconditionFailed)
+	}
+}
+
+// TestGetCalendarObjectKeepsAWeakETag verifies a weak ETag, as a compressing
+// proxy in front of Nextcloud sends, is returned as the server sent it.
+func TestGetCalendarObjectKeepsAWeakETag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", ical.MIMEType)
+		w.Header().Set("ETag", `W/"e1"`)
+		if err := ical.NewEncoder(w).Encode(minimalCalendar()); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(http.DefaultClient, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	co, err := c.GetCalendarObject(context.Background(), "/cal/test-uid.ics")
+	if err != nil {
+		t.Fatalf("GetCalendarObject: %v", err)
+	}
+	if co.ETag != `W/"e1"` {
+		t.Errorf("ETag = %q, want %q", co.ETag, `W/"e1"`)
+	}
+}
+
+// TestMultiGetCalendarKeepsETags verifies getetag values are returned as the
+// server wrote them, weak or strong.
+func TestMultiGetCalendarKeepsETags(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusMultiStatus)
+		io.WriteString(w, `<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+ <D:response><D:href>/cal/a.ics</D:href><D:propstat><D:prop><D:getetag>"a1"</D:getetag>
+  <C:calendar-data>BEGIN:VCALENDAR&#13;
+VERSION:2.0&#13;
+PRODID:-//t//t//EN&#13;
+END:VCALENDAR&#13;
+</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+ <D:response><D:href>/cal/b.ics</D:href><D:propstat><D:prop><D:getetag>W/"b1"</D:getetag>
+  <C:calendar-data>BEGIN:VCALENDAR&#13;
+VERSION:2.0&#13;
+PRODID:-//t//t//EN&#13;
+END:VCALENDAR&#13;
+</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+</D:multistatus>`)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(http.DefaultClient, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	objs, err := c.MultiGetCalendar(context.Background(), "/cal/", &CalendarMultiGet{Paths: []string{"/cal/a.ics", "/cal/b.ics"}})
+	if err != nil {
+		t.Fatalf("MultiGetCalendar: %v", err)
+	}
+	if len(objs) != 2 || objs[0].ETag != `"a1"` || objs[1].ETag != `W/"b1"` {
+		t.Errorf("objects = %+v, want ETags %q and %q", objs, `"a1"`, `W/"b1"`)
 	}
 }

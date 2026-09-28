@@ -661,7 +661,7 @@ func (b *backend) propFindAddressObject(ctx context.Context, propfind *internal.
 
 	if ao.ETag != "" {
 		props[internal.GetETagName] = internal.PropFindValue(&internal.GetETag{
-			ETag: internal.ETag(ao.ETag),
+			ETag: internal.ETag(ao.ETag).String(),
 		})
 	}
 

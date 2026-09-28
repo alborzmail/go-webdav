@@ -405,11 +405,15 @@ type GetLastModified struct {
 }
 
 // https://tools.ietf.org/html/rfc4918#section-15.6
+//
+// ETag is the entity-tag as written, quotes and weakness included.
 type GetETag struct {
 	XMLName xml.Name `xml:"DAV: getetag"`
-	ETag    ETag     `xml:",chardata"`
+	ETag    string   `xml:",chardata"`
 }
 
+// ETag is an opaque-tag, or an entity-tag as a client read it: the value of
+// an ETag field in either form.
 type ETag string
 
 func (etag *ETag) UnmarshalText(b []byte) error {
@@ -433,8 +437,20 @@ func (etag ETag) MarshalText() ([]byte, error) {
 	return []byte(etag.String()), nil
 }
 
+// String is the entity-tag; one that already is one is kept as it is.
 func (etag ETag) String() string {
+	if IsEntityTag(string(etag)) {
+		return string(etag)
+	}
 	return fmt.Sprintf("%q", string(etag))
+}
+
+// IsEntityTag reports whether s is an entity-tag as HTTP writes it, rather
+// than a bare opaque-tag, which can't hold a double quote (RFC 7232 section
+// 2.3).
+func IsEntityTag(s string) bool {
+	s = strings.TrimPrefix(s, "W/")
+	return len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"'
 }
 
 // https://tools.ietf.org/html/rfc4918#section-14.5

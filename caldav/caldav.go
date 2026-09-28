@@ -156,6 +156,9 @@ type CalendarMultiGet struct {
 	CompRequest CalendarCompRequest
 }
 
+// CalendarObject is a calendar object resource. Its ETag is an opaque-tag or
+// an entity-tag; the client keeps it as the server sent it, weak or strong,
+// fit for an If-Match header.
 type CalendarObject struct {
 	Path          string
 	ModTime       time.Time
