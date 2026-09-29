@@ -250,7 +250,7 @@ BEGIN:VEVENT
 DTSTAMP:20060206T001121Z
 DTSTART:20060321T100000Z
 DURATION:PT1H
-RRULE:RSCALE=PERSIAN;FREQ=YEARLY;SKIP=BACKWARD
+RRULE:RSCALE=HEBREW;FREQ=YEARLY;SKIP=BACKWARD
 SUMMARY:Nowruz
 UID:5E8B3B0E-9B7C-4D0A-8C38-2F7E3A6D1C01@example.com
 END:VEVENT
@@ -516,6 +516,10 @@ func TestFilterRecurringTimeRange(t *testing.T) {
 		"RECURRENCE-ID:20060103T100000Z\nDTSTART:20060110T100000Z\nDURATION:PT1H",
 	)
 
+	endless := newCO("DTSTART:20060101T100000Z\nRRULE:FREQ=SECONDLY")
+	openQuery := query("20060105T000000Z", "20060105T000000Z")
+	openQuery.CompFilter.Comps[0].End = time.Time{}
+	nowruz := newCO("DTSTART:20060321T100000Z\nDURATION:PT1H\nRRULE:RSCALE=PERSIAN;FREQ=YEARLY")
 	movedTail := newCO(
 		"DTSTART:20060102T100000Z\nDTEND:20060102T110000Z\nRRULE:FREQ=DAILY;COUNT=5",
 		"RECURRENCE-ID;RANGE=THISANDFUTURE:20060104T100000Z\nDTSTART:20060104T150000Z\nDTEND:20060104T170000Z",
@@ -537,6 +541,9 @@ func TestFilterRecurringTimeRange(t *testing.T) {
 		{"a this-and-future override moves the tail into the range", query("20060105T160000Z", "20060105T163000Z"), movedTail, true},
 		{"a this-and-future override moves the tail out of the range", query("20060105T100000Z", "20060105T110000Z"), movedTail, false},
 		{"a this-and-future override leaves earlier instances", query("20060103T100000Z", "20060103T110000Z"), movedTail, true},
+		{"a Solar Hijri rule falls on Nowruz", query("20080320T100000Z", "20080320T110000Z"), nowruz, true},
+		{"a Solar Hijri rule leaves the Gregorian date", query("20080321T100000Z", "20080321T110000Z"), nowruz, false},
+		{"an endless rule runs into a range without end", openQuery, endless, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Filter(tc.query, []CalendarObject{tc.co})

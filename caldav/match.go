@@ -1,9 +1,11 @@
 package caldav
 
 import (
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/alborzmail/go-recur"
 	"github.com/emersion/go-ical"
 )
 
@@ -39,13 +41,13 @@ func Match(query CompFilter, co *CalendarObject) (matched bool, err error) {
 	return match(query, co.Data.Component, nil)
 }
 
-func match(filter CompFilter, comp *ical.Component, siblings []*ical.Component) (bool, error) {
+func match(filter CompFilter, comp, parent *ical.Component) (bool, error) {
 	if comp.Name != filter.Name {
 		return filter.IsNotDefined, nil
 	}
 
 	if !filter.Start.IsZero() || !filter.End.IsZero() {
-		match, err := matchCompTimeRange(filter.Start, filter.End, comp, siblings)
+		match, err := matchCompTimeRange(filter.Start, filter.End, comp, parent)
 		if err != nil {
 			return false, err
 		}
@@ -77,7 +79,7 @@ func match(filter CompFilter, comp *ical.Component, siblings []*ical.Component) 
 func matchCompFilter(filter CompFilter, comp *ical.Component) (bool, error) {
 	var matches []*ical.Component
 	for _, child := range comp.Children {
-		match, err := match(filter, child, comp.Children)
+		match, err := match(filter, child, comp)
 		if err != nil {
 			return false, err
 		} else if match {
@@ -122,129 +124,82 @@ func matchPropFilter(filter PropFilter, comp *ical.Component) (bool, error) {
 	return true, nil
 }
 
-func matchCompTimeRange(start, end time.Time, comp *ical.Component, siblings []*ical.Component) (bool, error) {
+func matchCompTimeRange(start, end time.Time, comp, parent *ical.Component) (bool, error) {
 	// See https://datatracker.ietf.org/doc/html/rfc4791#section-9.9
 	// The "start" attribute specifies the inclusive start of the time range,
 	// and the "end" attribute specifies the non-inclusive end of the time range.
 	// Both attributes MUST be specified as "date with UTC time" value.
 
-	// Siblings with a RECURRENCE-ID replace instances of the master's rule;
-	// one with RANGE=THISANDFUTURE replaces that instance and every later
-	// one with its own, shifted by as much as it moves its own instance
-	// (RFC 5545 section 3.8.4.4).
-	var master *ical.Component
-	var moved, futures []time.Time
-	var from time.Time
-	for _, sibling := range siblings {
-		if sibling.Name != comp.Name {
-			continue
-		}
-		prop := sibling.Props.Get(ical.PropRecurrenceID)
-		if prop == nil {
-			master = sibling
-			continue
-		}
-		rid, err := prop.DateTime(time.UTC)
-		if err != nil {
-			return false, err
-		}
-		moved = append(moved, rid)
-		if prop.Params.Get(ical.ParamRange) == "THISANDFUTURE" {
-			futures = append(futures, rid)
-			if sibling == comp {
-				from = rid
-			}
-		}
-	}
-	rule, shift := comp, time.Duration(0)
-	if !from.IsZero() && master != nil {
-		dtstart, err := comp.Props.DateTime(ical.PropDateTimeStart, time.UTC)
-		if err != nil {
-			return false, err
-		}
-		rule, shift = master, dtstart.Sub(from)
-	}
-	var until time.Time
-	for _, rid := range futures {
-		if rid.After(from) && (until.IsZero() || rid.Before(until)) {
-			until = rid
-		}
-	}
-
-	rset, err := rule.RecurrenceSet(time.UTC)
-	if err != nil {
-		// A rule that cannot be expanded here, such as one counted in another
-		// calendar (RFC 7529), may recur into any range. Keep the object for
-		// the client rather than fail the query for every other one.
-		return true, nil
-	}
 	overlaps, err := instanceOverlap(start, end, comp)
 	if err != nil || overlaps == nil {
 		return false, err
 	}
-	if rset == nil {
-		dtstart, err := comp.Props.DateTime(ical.PropDateTimeStart, time.UTC)
-		if err != nil {
-			return false, err
-		}
-		return overlaps(dtstart), nil
+	if comp.Props.Get(ical.PropDateTimeStart) == nil {
+		return overlaps(time.Time{}, time.Time{}), nil
 	}
 
-	for _, rid := range moved {
-		if !rid.Equal(from) {
-			rset.ExDate(rid)
-		}
+	// A component is matched by the instances it has in its series, which
+	// its RECURRENCE-ID siblings take from the master (RFC 5545 section
+	// 3.8.4.4).
+	uid, err := comp.Props.Text(ical.PropUID)
+	if err != nil {
+		return false, err
 	}
-	next := rset.Iterator()
-	for t, ok := next(); ok && (until.IsZero() || t.Before(until)); t, ok = next() {
-		if t.Before(from) {
-			continue
-		}
-		s := t.Add(shift)
-		// No instance starting after end can overlap the range.
-		if !end.IsZero() && s.After(end) {
-			break
-		}
-		if overlaps(s) {
+	series, err := (&ical.Calendar{Component: parent}).Series(uid, time.UTC)
+	if err != nil {
+		return unreadable(err)
+	}
+	to := end
+	if to.IsZero() {
+		to = openEnd
+	}
+	// Instants are whole seconds, so a second either side holds every
+	// instance that the section's inclusive bounds let in.
+	instances, err := series.Between(start.Add(-time.Second), to.Add(time.Second))
+	if err != nil {
+		return unreadable(err)
+	}
+	for inst := range instances {
+		if series.Component(inst) == comp && overlaps(inst.Start, inst.End) {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-// oneDay is the +P1D that RFC 4791 section 9.9 gives a DATE value.
-const oneDay = 24 * time.Hour
+// unreadable keeps an object whose rule cannot be expanded here, such as one
+// in a calendar scale not counted (RFC 7529): it may recur into any range,
+// and one such object must not fail the query for every other one.
+func unreadable(err error) (bool, error) {
+	if errors.Is(err, recur.ErrSyntax) || errors.Is(err, recur.ErrScale) {
+		return true, nil
+	}
+	return false, err
+}
+
+// openEnd stands for a time range without end: the first instant past
+// the years an iCalendar date can write.
+var openEnd = time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 // instanceOverlap returns RFC 4791 section 9.9's test of whether an instance
-// of comp starting at the given time overlaps [start, end), where a zero end
-// is open. It returns nil for components the section does not cover.
-func instanceOverlap(start, end time.Time, comp *ical.Component) (func(time.Time) bool, error) {
+// of comp from s to e overlaps [start, end), where a zero end is open. It
+// returns nil for components the section does not cover.
+func instanceOverlap(start, end time.Time, comp *ical.Component) (func(s, e time.Time) bool, error) {
 	endsAfter := func(t time.Time) bool { return end.IsZero() || end.After(t) }
 	endsAtOrAfter := func(t time.Time) bool { return end.IsZero() || !end.Before(t) }
-	constant := func(ok bool) func(time.Time) bool { return func(time.Time) bool { return ok } }
+	constant := func(ok bool) func(s, e time.Time) bool { return func(s, e time.Time) bool { return ok } }
 	dtstart := comp.Props.Get(ical.PropDateTimeStart)
 
 	switch comp.Name {
 	case ical.CompEvent:
-		event := ical.Event{Component: comp}
-		eventStart, err := event.DateTimeStart(time.UTC)
-		if err != nil {
-			return nil, err
-		}
-		eventEnd, err := event.DateTimeEnd(time.UTC)
-		if err != nil {
-			return nil, err
-		}
-		if d := eventEnd.Sub(eventStart); d > 0 {
-			return func(s time.Time) bool { return start.Before(s.Add(d)) && endsAfter(s) }, nil
-		}
-		return func(s time.Time) bool { return !start.After(s) && endsAfter(s) }, nil
+		return func(s, e time.Time) bool {
+			if e.After(s) {
+				return start.Before(e) && endsAfter(s)
+			}
+			return !start.After(s) && endsAfter(s)
+		}, nil
 
 	case ical.CompToDo:
-		todoStart, err := comp.Props.DateTime(ical.PropDateTimeStart, time.UTC)
-		if err != nil {
-			return nil, err
-		}
 		due, err := comp.Props.DateTime(ical.PropDue, time.UTC)
 		if err != nil {
 			return nil, err
@@ -261,22 +216,15 @@ func instanceOverlap(start, end time.Time, comp *ical.Component) (func(time.Time
 
 		switch {
 		case dtstart != nil && duration != nil:
-			d, err := duration.Duration()
-			if err != nil {
-				return nil, err
-			}
-			return func(s time.Time) bool {
-				e := s.Add(d)
+			return func(s, e time.Time) bool {
 				return !start.After(e) && (endsAfter(s) || endsAtOrAfter(e))
 			}, nil
 		case dtstart != nil && !due.IsZero():
-			d := due.Sub(todoStart)
-			return func(s time.Time) bool {
-				e := s.Add(d)
+			return func(s, e time.Time) bool {
 				return (start.Before(e) || !start.After(s)) && (endsAfter(s) || endsAtOrAfter(e))
 			}, nil
 		case dtstart != nil:
-			return func(s time.Time) bool { return !start.After(s) && endsAfter(s) }, nil
+			return func(s, e time.Time) bool { return !start.After(s) && endsAfter(s) }, nil
 		case !due.IsZero():
 			return constant(start.Before(due) && endsAtOrAfter(due)), nil
 		case !completed.IsZero() && !created.IsZero():
@@ -294,9 +242,9 @@ func instanceOverlap(start, end time.Time, comp *ical.Component) (func(time.Time
 		case dtstart == nil:
 			return constant(false), nil
 		case dtstart.ValueType() == ical.ValueDate:
-			return func(s time.Time) bool { return start.Before(s.Add(oneDay)) && endsAfter(s) }, nil
+			return func(s, e time.Time) bool { return start.Before(e) && endsAfter(s) }, nil
 		}
-		return func(s time.Time) bool { return !start.After(s) && endsAfter(s) }, nil
+		return func(s, e time.Time) bool { return !start.After(s) && endsAfter(s) }, nil
 	}
 	return nil, nil
 }
