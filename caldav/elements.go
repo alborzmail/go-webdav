@@ -21,6 +21,7 @@ var (
 	supportedCalendarDataName         = xml.Name{namespace, "supported-calendar-data"}
 	supportedCalendarComponentSetName = xml.Name{namespace, "supported-calendar-component-set"}
 	maxResourceSizeName               = xml.Name{namespace, "max-resource-size"}
+	supportedRScaleSetName            = xml.Name{namespace, "supported-rscale-set"}
 
 	calendarColorName = xml.Name{appleNamespace, "calendar-color"}
 
@@ -68,6 +69,12 @@ type supportedCalendarData struct {
 type supportedCalendarComponentSet struct {
 	XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav supported-calendar-component-set"`
 	Comp    []comp   `xml:"comp"`
+}
+
+// https://tools.ietf.org/html/rfc7529#section-10.1
+type supportedRScaleSet struct {
+	XMLName xml.Name `xml:"urn:ietf:params:xml:ns:caldav supported-rscale-set"`
+	RScale  []string `xml:"supported-rscale"`
 }
 
 // https://tools.ietf.org/html/rfc4791#section-9.6

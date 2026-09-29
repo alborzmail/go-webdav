@@ -50,6 +50,7 @@ func TestClientCalendarCollections(t *testing.T) {
 
 	backend.calendars[0].ReadOnly = true
 	backend.calendars[0].CTag = "7"
+	backend.calendars[0].SupportedRScaleSet = []string{"GREGORIAN", "PERSIAN"}
 	cals, err := c.FindCalendars(ctx, "/user/calendars/")
 	if err != nil {
 		t.Fatalf("FindCalendars: %v", err)
@@ -58,7 +59,8 @@ func TestClientCalendarCollections(t *testing.T) {
 		t.Fatalf("listed %d calendars, want 1", len(cals))
 	}
 	if cal := cals[0]; cal.Name != want.Name || cal.Color != want.Color || !cal.ReadOnly || cal.CTag != "7" ||
-		!reflect.DeepEqual(cal.SupportedComponentSet, want.SupportedComponentSet) {
+		!reflect.DeepEqual(cal.SupportedComponentSet, want.SupportedComponentSet) ||
+		!reflect.DeepEqual(cal.SupportedRScaleSet, []string{"GREGORIAN", "PERSIAN"}) {
 		t.Errorf("listed %+v", cal)
 	}
 

@@ -693,6 +693,9 @@ func (b *backend) propFindCalendar(ctx context.Context, propfind *internal.PropF
 				}, nil
 			}
 		}
+		if cal.SupportedRScaleSet != nil {
+			props[supportedRScaleSetName] = internal.PropFindValue(&supportedRScaleSet{RScale: cal.SupportedRScaleSet})
+		}
 		if cal.MaxResourceSize > 0 {
 			props[maxResourceSizeName] = internal.PropFindValue(&maxResourceSize{
 				Size: cal.MaxResourceSize,
@@ -851,6 +854,7 @@ var protectedProps = map[xml.Name]bool{
 	supportedCalendarDataName:            true,
 	supportedCalendarComponentSetName:    true,
 	maxResourceSizeName:                  true,
+	supportedRScaleSetName:               true,
 }
 
 func decodeDeadProperty(name xml.Name, raw *internal.RawXMLValue) (*webdav.DeadProperty, error) {

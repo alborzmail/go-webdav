@@ -71,7 +71,11 @@ type Calendar struct {
 	Color                 string
 	MaxResourceSize       int64
 	SupportedComponentSet []string
-	Timezone              *ical.Calendar
+	// SupportedRScaleSet names the calendar scales a rule may count in (RFC
+	// 7529 section 10). Nil when not advertised, and then no rule may
+	// carry RSCALE; empty when any scale may be tried.
+	SupportedRScaleSet []string
+	Timezone           *ical.Calendar
 	// ReadOnly reports that the current user may only read this calendar. It
 	// controls the DAV:current-user-privilege-set reported by the server.
 	ReadOnly bool

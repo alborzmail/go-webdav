@@ -25,6 +25,7 @@ var calendarProps = []xml.Name{
 	calendarColorName,
 	maxResourceSizeName,
 	supportedCalendarComponentSetName,
+	supportedRScaleSetName,
 	internal.CurrentUserPrivilegeSetName,
 	internal.GetCTagName,
 }
@@ -149,6 +150,14 @@ func decodeCalendar(path string, resp *internal.Response) (*Calendar, error) {
 		compNames = append(compNames, comp.Name)
 	}
 
+	var rscales []string
+	var rscaleSet supportedRScaleSet
+	if err := resp.DecodeProp(&rscaleSet); err == nil {
+		rscales = append([]string{}, rscaleSet.RScale...)
+	} else if !internal.IsNotFound(err) {
+		return nil, err
+	}
+
 	var color calendarColor
 	if err := resp.DecodeProp(&color); err != nil && !internal.IsNotFound(err) {
 		return nil, err
@@ -175,6 +184,7 @@ func decodeCalendar(path string, resp *internal.Response) (*Calendar, error) {
 		Color:                 strings.TrimSpace(color.Color),
 		MaxResourceSize:       maxResSize.Size,
 		SupportedComponentSet: compNames,
+		SupportedRScaleSet:    rscales,
 		ReadOnly:              readOnly,
 		CTag:                  ctag.CTag,
 	}, nil
