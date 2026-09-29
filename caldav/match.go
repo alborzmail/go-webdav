@@ -138,30 +138,23 @@ func matchCompTimeRange(start, end time.Time, comp *ical.Component) (bool, error
 		return true, nil
 	}
 	if rset != nil {
-		// return len(rset.Between(start, end, true)) > 0, nil
-		// if start is zero then rset.After(zero) should work
-
-		// TODO: first_after_start only looks at DTSTART yielding wrong behaviour;
-		// an event can start before interval [start,end) but still intersect the interval;
-		// in this case it should be matched by according to RFC 4791.
-		//
-		// "The CALDAV:time-range XML element specifies that for a
-		// given calendaring REPORT request, the server MUST only return the
-		// calendar object resources that, depending on the context, have a
-		// component or property whose value intersects a specified time
-		// range."
-		//
-		// OPTIMIZATION: would make slightly more efficient code,
-		// i.e., fewer passes over rset iterator,
-		// if rset.Iterator's next() function was exported as Next()
-		// and the following code block was rewritten
-		if first_after_start := rset.After(start, true); first_after_start.IsZero() {
-			return false, nil
-		} else if end.IsZero() || first_after_start.Before(end) {
-			return true, nil
-		} else {
-			return false, nil
+		// Every instance lasts as long as the first, so the first instance
+		// ending after start is the only one that needs checking against end.
+		var duration time.Duration
+		if comp.Name == ical.CompEvent {
+			event := ical.Event{Component: comp}
+			eventStart, err := event.DateTimeStart(time.UTC)
+			if err != nil {
+				return false, err
+			}
+			eventEnd, err := event.DateTimeEnd(time.UTC)
+			if err != nil {
+				return false, err
+			}
+			duration = eventEnd.Sub(eventStart)
 		}
+		first := rset.After(start.Add(-duration), duration == 0)
+		return !first.IsZero() && (end.IsZero() || first.Before(end)), nil
 	}
 
 	// TODO handle more than just events

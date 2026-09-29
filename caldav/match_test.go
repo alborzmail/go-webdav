@@ -477,3 +477,60 @@ END:VCALENDAR`)
 		})
 	}
 }
+
+func TestFilterRecurringTimeRange(t *testing.T) {
+	newCO := func(events ...string) CalendarObject {
+		s := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp.//CalDAV Client//EN\r\n"
+		for _, e := range events {
+			s += "BEGIN:VEVENT\r\nDTSTAMP:20060206T001102Z\r\nUID:recurring@example.com\r\n" +
+				strings.ReplaceAll(e, "\n", "\r\n") + "\r\nEND:VEVENT\r\n"
+		}
+		cal, err := ical.NewDecoder(strings.NewReader(s + "END:VCALENDAR\r\n")).Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return CalendarObject{Data: cal}
+	}
+	query := func(start, end string) *CalendarQuery {
+		return &CalendarQuery{CompFilter: CompFilter{
+			Name: "VCALENDAR",
+			Comps: []CompFilter{{
+				Name:  "VEVENT",
+				Start: toDate(t, start),
+				End:   toDate(t, end),
+			}},
+		}}
+	}
+
+	overnight := newCO("DTSTART:20060101T220000Z\nDTEND:20060102T020000Z\nRRULE:FREQ=DAILY;COUNT=5")
+	lateEvening := newCO("DTSTART:20060101T220000Z\nDTEND:20060102T000000Z\nRRULE:FREQ=DAILY;COUNT=5")
+	allDay := newCO("DTSTART;VALUE=DATE:20060101\nRRULE:FREQ=WEEKLY;COUNT=3")
+	moved := newCO(
+		"DTSTART:20060102T100000Z\nDURATION:PT1H\nRRULE:FREQ=DAILY;COUNT=3",
+		"RECURRENCE-ID:20060103T100000Z\nDTSTART:20060110T100000Z\nDURATION:PT1H",
+	)
+
+	for _, tc := range []struct {
+		name  string
+		query *CalendarQuery
+		co    CalendarObject
+		want  bool
+	}{
+		{"an instance runs into the range", query("20060103T000000Z", "20060103T010000Z"), overnight, true},
+		{"an instance ends at the range start", query("20060103T000000Z", "20060103T010000Z"), lateEvening, false},
+		{"an all-day instance covers the range", query("20060108T120000Z", "20060108T130000Z"), allDay, true},
+		{"an all-day instance ends at the range start", query("20060109T000000Z", "20060109T120000Z"), allDay, false},
+		{"an override moves an instance into the range", query("20060110T000000Z", "20060111T000000Z"), moved, true},
+		{"no instance falls in the range", query("20060111T000000Z", "20060112T000000Z"), moved, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Filter(tc.query, []CalendarObject{tc.co})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if matched := len(got) == 1; matched != tc.want {
+				t.Fatalf("matched=%v, want %v", matched, tc.want)
+			}
+		})
+	}
+}
