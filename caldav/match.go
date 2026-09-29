@@ -132,7 +132,10 @@ func matchCompTimeRange(start, end time.Time, comp *ical.Component) (bool, error
 	// evaluate recurring components
 	rset, err := comp.RecurrenceSet(time.UTC)
 	if err != nil {
-		return false, err
+		// A rule that cannot be expanded here, such as one counted in another
+		// calendar (RFC 7529), may recur into any range. Keep the object for
+		// the client rather than fail the query for every other one.
+		return true, nil
 	}
 	if rset != nil {
 		// return len(rset.Between(start, end, true)) > 0, nil

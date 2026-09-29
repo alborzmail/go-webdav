@@ -243,6 +243,19 @@ END:VALARM
 END:VTODO
 END:VCALENDAR`)
 
+	rscale := newCO(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Example Corp.//CalDAV Client//EN
+BEGIN:VEVENT
+DTSTAMP:20060206T001121Z
+DTSTART:20060321T100000Z
+DURATION:PT1H
+RRULE:RSCALE=PERSIAN;FREQ=YEARLY;SKIP=BACKWARD
+SUMMARY:Nowruz
+UID:5E8B3B0E-9B7C-4D0A-8C38-2F7E3A6D1C01@example.com
+END:VEVENT
+END:VCALENDAR`)
+
 	for _, tc := range []struct {
 		name  string
 		query *CalendarQuery
@@ -403,6 +416,44 @@ END:VCALENDAR`)
 			},
 			addrs: []CalendarObject{event4, event5},
 			want:  []CalendarObject{event5},
+		},
+		{
+			name: "a rule that cannot be expanded keeps its object",
+			query: &CalendarQuery{
+				CompFilter: CompFilter{
+					Name: "VCALENDAR",
+					Comps: []CompFilter{
+						CompFilter{
+							Name:  "VEVENT",
+							Start: toDate(t, "20060104T000000Z"),
+							End:   toDate(t, "20060105T000000Z"),
+						},
+					},
+				},
+			},
+			addrs: []CalendarObject{event1, event2, event3, rscale},
+			want:  []CalendarObject{event2, event3, rscale},
+		},
+		{
+			name: "and other filters still apply to it",
+			query: &CalendarQuery{
+				CompFilter: CompFilter{
+					Name: "VCALENDAR",
+					Comps: []CompFilter{
+						CompFilter{
+							Name:  "VEVENT",
+							Start: toDate(t, "20060104T000000Z"),
+							End:   toDate(t, "20060105T000000Z"),
+							Props: []PropFilter{{
+								Name:      "SUMMARY",
+								TextMatch: &TextMatch{Text: "Event #3"},
+							}},
+						},
+					},
+				},
+			},
+			addrs: []CalendarObject{event3, rscale},
+			want:  []CalendarObject{event3},
 		},
 
 		// TODO add more examples
