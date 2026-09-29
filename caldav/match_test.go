@@ -478,29 +478,35 @@ END:VCALENDAR`)
 	}
 }
 
+// newComps returns a calendar object holding one comp per body, each body
+// being newline-separated properties.
+func newComps(t *testing.T, comp string, bodies ...string) CalendarObject {
+	s := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp.//CalDAV Client//EN\r\n"
+	for _, body := range bodies {
+		s += "BEGIN:" + comp + "\r\nDTSTAMP:20060206T001102Z\r\nUID:time-range@example.com\r\n" +
+			strings.ReplaceAll(body, "\n", "\r\n") + "\r\nEND:" + comp + "\r\n"
+	}
+	cal, err := ical.NewDecoder(strings.NewReader(s + "END:VCALENDAR\r\n")).Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CalendarObject{Data: cal}
+}
+
+func timeRangeQuery(t *testing.T, comp, start, end string) *CalendarQuery {
+	return &CalendarQuery{CompFilter: CompFilter{
+		Name: "VCALENDAR",
+		Comps: []CompFilter{{
+			Name:  comp,
+			Start: toDate(t, start),
+			End:   toDate(t, end),
+		}},
+	}}
+}
+
 func TestFilterRecurringTimeRange(t *testing.T) {
-	newCO := func(events ...string) CalendarObject {
-		s := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example Corp.//CalDAV Client//EN\r\n"
-		for _, e := range events {
-			s += "BEGIN:VEVENT\r\nDTSTAMP:20060206T001102Z\r\nUID:recurring@example.com\r\n" +
-				strings.ReplaceAll(e, "\n", "\r\n") + "\r\nEND:VEVENT\r\n"
-		}
-		cal, err := ical.NewDecoder(strings.NewReader(s + "END:VCALENDAR\r\n")).Decode()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return CalendarObject{Data: cal}
-	}
-	query := func(start, end string) *CalendarQuery {
-		return &CalendarQuery{CompFilter: CompFilter{
-			Name: "VCALENDAR",
-			Comps: []CompFilter{{
-				Name:  "VEVENT",
-				Start: toDate(t, start),
-				End:   toDate(t, end),
-			}},
-		}}
-	}
+	newCO := func(events ...string) CalendarObject { return newComps(t, "VEVENT", events...) }
+	query := func(start, end string) *CalendarQuery { return timeRangeQuery(t, "VEVENT", start, end) }
 
 	overnight := newCO("DTSTART:20060101T220000Z\nDTEND:20060102T020000Z\nRRULE:FREQ=DAILY;COUNT=5")
 	lateEvening := newCO("DTSTART:20060101T220000Z\nDTEND:20060102T000000Z\nRRULE:FREQ=DAILY;COUNT=5")
@@ -526,6 +532,53 @@ func TestFilterRecurringTimeRange(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Filter(tc.query, []CalendarObject{tc.co})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if matched := len(got) == 1; matched != tc.want {
+				t.Fatalf("matched=%v, want %v", matched, tc.want)
+			}
+		})
+	}
+}
+
+// Each case is a row of the VTODO and VJOURNAL tables in RFC 4791 section 9.9,
+// queried for [20060103T000000Z, 20060104T000000Z).
+func TestFilterToDoJournalTimeRange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		comp string
+		body string
+		want bool
+	}{
+		{"todo with duration runs into the range", "VTODO", "DTSTART:20060102T220000Z\nDURATION:PT4H", true},
+		{"todo with duration ends at the range start", "VTODO", "DTSTART:20060102T200000Z\nDURATION:PT4H", true},
+		{"todo with duration ends before the range", "VTODO", "DTSTART:20060102T200000Z\nDURATION:PT3H", false},
+		{"todo with due spans the range", "VTODO", "DTSTART:20060102T100000Z\nDUE:20060105T100000Z", true},
+		{"todo with due starts at the range end", "VTODO", "DTSTART:20060104T000000Z\nDUE:20060105T000000Z", false},
+		{"todo with start only starts in the range", "VTODO", "DTSTART:20060103T120000Z", true},
+		{"todo with start only starts before the range", "VTODO", "DTSTART:20060102T120000Z", false},
+		{"todo with due only is due at the range end", "VTODO", "DUE:20060104T000000Z", true},
+		{"todo with due only is due at the range start", "VTODO", "DUE:20060103T000000Z", false},
+		{"todo completed in the range", "VTODO", "CREATED:20060101T000000Z\nCOMPLETED:20060103T120000Z", true},
+		{"todo created and completed before the range", "VTODO", "CREATED:20060101T000000Z\nCOMPLETED:20060102T000000Z", false},
+		{"todo with completed only in the range", "VTODO", "COMPLETED:20060103T120000Z", true},
+		{"todo with completed only before the range", "VTODO", "COMPLETED:20060102T000000Z", false},
+		{"todo with created only before the range end", "VTODO", "CREATED:20060102T000000Z", true},
+		{"todo with created only at the range end", "VTODO", "CREATED:20060104T000000Z", false},
+		{"todo with no times", "VTODO", "SUMMARY:Anytime", true},
+		{"recurring todo runs into the range", "VTODO", "DTSTART:20060101T220000Z\nDUE:20060102T020000Z\nRRULE:FREQ=DAILY;COUNT=2", true},
+		{"recurring todo ends before the range", "VTODO", "DTSTART:20060101T220000Z\nDUE:20060102T020000Z\nRRULE:FREQ=DAILY;COUNT=1", false},
+		{"journal at a time in the range", "VJOURNAL", "DTSTART:20060103T120000Z", true},
+		{"journal at the range end", "VJOURNAL", "DTSTART:20060104T000000Z", false},
+		{"journal on the day of the range", "VJOURNAL", "DTSTART;VALUE=DATE:20060103", true},
+		{"journal on the day before the range", "VJOURNAL", "DTSTART;VALUE=DATE:20060102", false},
+		{"journal with no start", "VJOURNAL", "SUMMARY:Undated", false},
+		{"recurring journal has a day in the range", "VJOURNAL", "DTSTART;VALUE=DATE:20060101\nRRULE:FREQ=DAILY;COUNT=5", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := timeRangeQuery(t, tc.comp, "20060103T000000Z", "20060104T000000Z")
+			got, err := Filter(query, []CalendarObject{newComps(t, tc.comp, tc.body)})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -141,7 +141,6 @@ func matchCompTimeRange(start, end time.Time, comp *ical.Component, overridden [
 	// and the "end" attribute specifies the non-inclusive end of the time range.
 	// Both attributes MUST be specified as "date with UTC time" value.
 
-	// evaluate recurring components
 	rset, err := comp.RecurrenceSet(time.UTC)
 	if err != nil {
 		// A rule that cannot be expanded here, such as one counted in another
@@ -149,63 +148,118 @@ func matchCompTimeRange(start, end time.Time, comp *ical.Component, overridden [
 		// the client rather than fail the query for every other one.
 		return true, nil
 	}
-	if rset != nil {
-		for _, t := range overridden {
-			rset.ExDate(t)
-		}
-		// Every instance lasts as long as the first, so the first instance
-		// ending after start is the only one that needs checking against end.
-		var duration time.Duration
-		if comp.Name == ical.CompEvent {
-			event := ical.Event{Component: comp}
-			eventStart, err := event.DateTimeStart(time.UTC)
-			if err != nil {
-				return false, err
-			}
-			eventEnd, err := event.DateTimeEnd(time.UTC)
-			if err != nil {
-				return false, err
-			}
-			duration = eventEnd.Sub(eventStart)
-		}
-		first := rset.After(start.Add(-duration), duration == 0)
-		return !first.IsZero() && (end.IsZero() || first.Before(end)), nil
-	}
-
-	// TODO handle more than just events
-	if comp.Name != ical.CompEvent {
-		return false, nil
-	}
-	event := ical.Event{Component: comp}
-
-	eventStart, err := event.DateTimeStart(time.UTC)
-	if err != nil {
+	overlaps, err := instanceOverlap(start, end, comp)
+	if err != nil || overlaps == nil {
 		return false, err
 	}
-	eventEnd, err := event.DateTimeEnd(time.UTC)
-	if err != nil {
-		return false, err
+	if rset == nil {
+		dtstart, err := comp.Props.DateTime(ical.PropDateTimeStart, time.UTC)
+		if err != nil {
+			return false, err
+		}
+		return overlaps(dtstart), nil
 	}
-	duration_zero := eventStart.Equal(eventEnd)
 
-	// test if [eventStart, eventEnd) intersects [start, end)
-	// special handling if duration_zero;
-	// in that case check if eventStart is contained in [start,end)
-	//
-	// S_E compare event start versus filter end
-	// E_S compare event end versus filter start
-	//
-	// refer to table https://datatracker.ietf.org/doc/html/rfc4791#section-9.9
-	//
-	if S_E := eventStart.Compare(end); start.IsZero() && S_E < 0 {
-		return true, nil
-	} else if E_S := eventEnd.Compare(start); end.IsZero() && (E_S > 0 || (duration_zero && E_S >= 0)) {
-		return true, nil
-	} else if (S_E < 0 && E_S > 0) || (duration_zero && E_S >= 0 && S_E < 0) {
-		return true, nil
-	} else {
-		return false, nil
+	for _, t := range overridden {
+		rset.ExDate(t)
 	}
+	// No instance starting after end can overlap the range.
+	next := rset.Iterator()
+	for t, ok := next(); ok && (end.IsZero() || !t.After(end)); t, ok = next() {
+		if overlaps(t) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// oneDay is the +P1D that RFC 4791 section 9.9 gives a DATE value.
+const oneDay = 24 * time.Hour
+
+// instanceOverlap returns RFC 4791 section 9.9's test of whether an instance
+// of comp starting at the given time overlaps [start, end), where a zero end
+// is open. It returns nil for components the section does not cover.
+func instanceOverlap(start, end time.Time, comp *ical.Component) (func(time.Time) bool, error) {
+	endsAfter := func(t time.Time) bool { return end.IsZero() || end.After(t) }
+	endsAtOrAfter := func(t time.Time) bool { return end.IsZero() || !end.Before(t) }
+	constant := func(ok bool) func(time.Time) bool { return func(time.Time) bool { return ok } }
+	dtstart := comp.Props.Get(ical.PropDateTimeStart)
+
+	switch comp.Name {
+	case ical.CompEvent:
+		event := ical.Event{Component: comp}
+		eventStart, err := event.DateTimeStart(time.UTC)
+		if err != nil {
+			return nil, err
+		}
+		eventEnd, err := event.DateTimeEnd(time.UTC)
+		if err != nil {
+			return nil, err
+		}
+		if d := eventEnd.Sub(eventStart); d > 0 {
+			return func(s time.Time) bool { return start.Before(s.Add(d)) && endsAfter(s) }, nil
+		}
+		return func(s time.Time) bool { return !start.After(s) && endsAfter(s) }, nil
+
+	case ical.CompToDo:
+		todoStart, err := comp.Props.DateTime(ical.PropDateTimeStart, time.UTC)
+		if err != nil {
+			return nil, err
+		}
+		due, err := comp.Props.DateTime(ical.PropDue, time.UTC)
+		if err != nil {
+			return nil, err
+		}
+		completed, err := comp.Props.DateTime(ical.PropCompleted, time.UTC)
+		if err != nil {
+			return nil, err
+		}
+		created, err := comp.Props.DateTime(ical.PropCreated, time.UTC)
+		if err != nil {
+			return nil, err
+		}
+		duration := comp.Props.Get(ical.PropDuration)
+
+		switch {
+		case dtstart != nil && duration != nil:
+			d, err := duration.Duration()
+			if err != nil {
+				return nil, err
+			}
+			return func(s time.Time) bool {
+				e := s.Add(d)
+				return !start.After(e) && (endsAfter(s) || endsAtOrAfter(e))
+			}, nil
+		case dtstart != nil && !due.IsZero():
+			d := due.Sub(todoStart)
+			return func(s time.Time) bool {
+				e := s.Add(d)
+				return (start.Before(e) || !start.After(s)) && (endsAfter(s) || endsAtOrAfter(e))
+			}, nil
+		case dtstart != nil:
+			return func(s time.Time) bool { return !start.After(s) && endsAfter(s) }, nil
+		case !due.IsZero():
+			return constant(start.Before(due) && endsAtOrAfter(due)), nil
+		case !completed.IsZero() && !created.IsZero():
+			return constant((!start.After(created) || !start.After(completed)) &&
+				(endsAtOrAfter(created) || endsAtOrAfter(completed))), nil
+		case !completed.IsZero():
+			return constant(!start.After(completed) && endsAtOrAfter(completed)), nil
+		case !created.IsZero():
+			return constant(endsAfter(created)), nil
+		}
+		return constant(true), nil
+
+	case ical.CompJournal:
+		switch {
+		case dtstart == nil:
+			return constant(false), nil
+		case dtstart.ValueType() == ical.ValueDate:
+			return func(s time.Time) bool { return start.Before(s.Add(oneDay)) && endsAfter(s) }, nil
+		}
+		return func(s time.Time) bool { return !start.After(s) && endsAfter(s) }, nil
+	}
+	return nil, nil
 }
 
 func matchPropTimeRange(start, end time.Time, field *ical.Prop) (bool, error) {
