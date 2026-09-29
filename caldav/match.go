@@ -39,13 +39,13 @@ func Match(query CompFilter, co *CalendarObject) (matched bool, err error) {
 	return match(query, co.Data.Component, nil)
 }
 
-func match(filter CompFilter, comp *ical.Component, overridden []time.Time) (bool, error) {
+func match(filter CompFilter, comp *ical.Component, siblings []*ical.Component) (bool, error) {
 	if comp.Name != filter.Name {
 		return filter.IsNotDefined, nil
 	}
 
 	if !filter.Start.IsZero() || !filter.End.IsZero() {
-		match, err := matchCompTimeRange(filter.Start, filter.End, comp, overridden)
+		match, err := matchCompTimeRange(filter.Start, filter.End, comp, siblings)
 		if err != nil {
 			return false, err
 		}
@@ -75,22 +75,9 @@ func match(filter CompFilter, comp *ical.Component, overridden []time.Time) (boo
 }
 
 func matchCompFilter(filter CompFilter, comp *ical.Component) (bool, error) {
-	// An instance moved by a sibling component is no longer where the
-	// recurrence rule puts it.
-	var overridden []time.Time
-	for _, child := range comp.Children {
-		if prop := child.Props.Get(ical.PropRecurrenceID); prop != nil {
-			t, err := prop.DateTime(time.UTC)
-			if err != nil {
-				return false, err
-			}
-			overridden = append(overridden, t)
-		}
-	}
-
 	var matches []*ical.Component
 	for _, child := range comp.Children {
-		match, err := match(filter, child, overridden)
+		match, err := match(filter, child, comp.Children)
 		if err != nil {
 			return false, err
 		} else if match {
@@ -135,13 +122,56 @@ func matchPropFilter(filter PropFilter, comp *ical.Component) (bool, error) {
 	return true, nil
 }
 
-func matchCompTimeRange(start, end time.Time, comp *ical.Component, overridden []time.Time) (bool, error) {
+func matchCompTimeRange(start, end time.Time, comp *ical.Component, siblings []*ical.Component) (bool, error) {
 	// See https://datatracker.ietf.org/doc/html/rfc4791#section-9.9
 	// The "start" attribute specifies the inclusive start of the time range,
 	// and the "end" attribute specifies the non-inclusive end of the time range.
 	// Both attributes MUST be specified as "date with UTC time" value.
 
-	rset, err := comp.RecurrenceSet(time.UTC)
+	// Siblings with a RECURRENCE-ID replace instances of the master's rule;
+	// one with RANGE=THISANDFUTURE replaces that instance and every later
+	// one with its own, shifted by as much as it moves its own instance
+	// (RFC 5545 section 3.8.4.4).
+	var master *ical.Component
+	var moved, futures []time.Time
+	var from time.Time
+	for _, sibling := range siblings {
+		if sibling.Name != comp.Name {
+			continue
+		}
+		prop := sibling.Props.Get(ical.PropRecurrenceID)
+		if prop == nil {
+			master = sibling
+			continue
+		}
+		rid, err := prop.DateTime(time.UTC)
+		if err != nil {
+			return false, err
+		}
+		moved = append(moved, rid)
+		if prop.Params.Get(ical.ParamRange) == "THISANDFUTURE" {
+			futures = append(futures, rid)
+			if sibling == comp {
+				from = rid
+			}
+		}
+	}
+	rule, shift := comp, time.Duration(0)
+	if !from.IsZero() && master != nil {
+		dtstart, err := comp.Props.DateTime(ical.PropDateTimeStart, time.UTC)
+		if err != nil {
+			return false, err
+		}
+		rule, shift = master, dtstart.Sub(from)
+	}
+	var until time.Time
+	for _, rid := range futures {
+		if rid.After(from) && (until.IsZero() || rid.Before(until)) {
+			until = rid
+		}
+	}
+
+	rset, err := rule.RecurrenceSet(time.UTC)
 	if err != nil {
 		// A rule that cannot be expanded here, such as one counted in another
 		// calendar (RFC 7529), may recur into any range. Keep the object for
@@ -160,13 +190,22 @@ func matchCompTimeRange(start, end time.Time, comp *ical.Component, overridden [
 		return overlaps(dtstart), nil
 	}
 
-	for _, t := range overridden {
-		rset.ExDate(t)
+	for _, rid := range moved {
+		if !rid.Equal(from) {
+			rset.ExDate(rid)
+		}
 	}
-	// No instance starting after end can overlap the range.
 	next := rset.Iterator()
-	for t, ok := next(); ok && (end.IsZero() || !t.After(end)); t, ok = next() {
-		if overlaps(t) {
+	for t, ok := next(); ok && (until.IsZero() || t.Before(until)); t, ok = next() {
+		if t.Before(from) {
+			continue
+		}
+		s := t.Add(shift)
+		// No instance starting after end can overlap the range.
+		if !end.IsZero() && s.After(end) {
+			break
+		}
+		if overlaps(s) {
 			return true, nil
 		}
 	}

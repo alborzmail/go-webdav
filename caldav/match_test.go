@@ -516,6 +516,11 @@ func TestFilterRecurringTimeRange(t *testing.T) {
 		"RECURRENCE-ID:20060103T100000Z\nDTSTART:20060110T100000Z\nDURATION:PT1H",
 	)
 
+	movedTail := newCO(
+		"DTSTART:20060102T100000Z\nDTEND:20060102T110000Z\nRRULE:FREQ=DAILY;COUNT=5",
+		"RECURRENCE-ID;RANGE=THISANDFUTURE:20060104T100000Z\nDTSTART:20060104T150000Z\nDTEND:20060104T170000Z",
+	)
+
 	for _, tc := range []struct {
 		name  string
 		query *CalendarQuery
@@ -529,6 +534,9 @@ func TestFilterRecurringTimeRange(t *testing.T) {
 		{"an override moves an instance into the range", query("20060110T000000Z", "20060111T000000Z"), moved, true},
 		{"no instance falls in the range", query("20060111T000000Z", "20060112T000000Z"), moved, false},
 		{"an override moves an instance out of the range", query("20060103T000000Z", "20060104T000000Z"), moved, false},
+		{"a this-and-future override moves the tail into the range", query("20060105T160000Z", "20060105T163000Z"), movedTail, true},
+		{"a this-and-future override moves the tail out of the range", query("20060105T100000Z", "20060105T110000Z"), movedTail, false},
+		{"a this-and-future override leaves earlier instances", query("20060103T100000Z", "20060103T110000Z"), movedTail, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Filter(tc.query, []CalendarObject{tc.co})
