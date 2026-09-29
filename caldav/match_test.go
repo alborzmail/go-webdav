@@ -522,6 +522,7 @@ func TestFilterRecurringTimeRange(t *testing.T) {
 		{"an all-day instance ends at the range start", query("20060109T000000Z", "20060109T120000Z"), allDay, false},
 		{"an override moves an instance into the range", query("20060110T000000Z", "20060111T000000Z"), moved, true},
 		{"no instance falls in the range", query("20060111T000000Z", "20060112T000000Z"), moved, false},
+		{"an override moves an instance out of the range", query("20060103T000000Z", "20060104T000000Z"), moved, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Filter(tc.query, []CalendarObject{tc.co})

@@ -36,16 +36,16 @@ func Match(query CompFilter, co *CalendarObject) (matched bool, err error) {
 	if co.Data == nil || co.Data.Component == nil {
 		panic("request to process empty calendar object")
 	}
-	return match(query, co.Data.Component)
+	return match(query, co.Data.Component, nil)
 }
 
-func match(filter CompFilter, comp *ical.Component) (bool, error) {
+func match(filter CompFilter, comp *ical.Component, overridden []time.Time) (bool, error) {
 	if comp.Name != filter.Name {
 		return filter.IsNotDefined, nil
 	}
 
 	if !filter.Start.IsZero() || !filter.End.IsZero() {
-		match, err := matchCompTimeRange(filter.Start, filter.End, comp)
+		match, err := matchCompTimeRange(filter.Start, filter.End, comp, overridden)
 		if err != nil {
 			return false, err
 		}
@@ -75,10 +75,22 @@ func match(filter CompFilter, comp *ical.Component) (bool, error) {
 }
 
 func matchCompFilter(filter CompFilter, comp *ical.Component) (bool, error) {
-	var matches []*ical.Component
-
+	// An instance moved by a sibling component is no longer where the
+	// recurrence rule puts it.
+	var overridden []time.Time
 	for _, child := range comp.Children {
-		match, err := match(filter, child)
+		if prop := child.Props.Get(ical.PropRecurrenceID); prop != nil {
+			t, err := prop.DateTime(time.UTC)
+			if err != nil {
+				return false, err
+			}
+			overridden = append(overridden, t)
+		}
+	}
+
+	var matches []*ical.Component
+	for _, child := range comp.Children {
+		match, err := match(filter, child, overridden)
 		if err != nil {
 			return false, err
 		} else if match {
@@ -123,7 +135,7 @@ func matchPropFilter(filter PropFilter, comp *ical.Component) (bool, error) {
 	return true, nil
 }
 
-func matchCompTimeRange(start, end time.Time, comp *ical.Component) (bool, error) {
+func matchCompTimeRange(start, end time.Time, comp *ical.Component, overridden []time.Time) (bool, error) {
 	// See https://datatracker.ietf.org/doc/html/rfc4791#section-9.9
 	// The "start" attribute specifies the inclusive start of the time range,
 	// and the "end" attribute specifies the non-inclusive end of the time range.
@@ -138,6 +150,9 @@ func matchCompTimeRange(start, end time.Time, comp *ical.Component) (bool, error
 		return true, nil
 	}
 	if rset != nil {
+		for _, t := range overridden {
+			rset.ExDate(t)
+		}
 		// Every instance lasts as long as the first, so the first instance
 		// ending after start is the only one that needs checking against end.
 		var duration time.Duration
