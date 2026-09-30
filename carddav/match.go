@@ -50,6 +50,15 @@ func Filter(query *AddressBookQuery, aos []AddressObject) ([]AddressObject, erro
 	}
 	out := make([]AddressObject, 0, n)
 	for _, ao := range aos {
+		// An object that could not be parsed may match anything, and is
+		// kept whole.
+		if ao.Card == nil {
+			out = append(out, ao)
+			if len(out) >= n {
+				break
+			}
+			continue
+		}
 		ok, err := Match(query, &ao)
 		if err != nil {
 			return nil, err

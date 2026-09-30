@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/emersion/go-vcard"
@@ -129,5 +130,46 @@ END:VCARD&#13;
 	}
 	if o := got.Updated[0]; o.Path != "/book/a.vcf" || o.ETag != `"a1"` || string(o.Raw) != data || o.Card.PreferredValue(vcard.FieldFormattedName) != "Alice" {
 		t.Errorf("updated %+v", o)
+	}
+}
+
+func TestQueryAddressBookUnreadable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusMultiStatus)
+		io.WriteString(w, `<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+ <D:response><D:href>/book/a.vcf</D:href><D:propstat><D:prop>
+  <C:address-data>BEGIN:VCARD&#13;
+VERSION:4.0&#13;
+FN:Ada&#13;
+END:VCARD&#13;
+</C:address-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+ <D:response><D:href>/book/b.vcf</D:href><D:propstat><D:prop>
+  <C:address-data>BEGIN:VCARD&#13;
+VERSION:4.0&#13;
+FN:Bob&#13;
+</C:address-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+</D:multistatus>`)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(http.DefaultClient, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := c.QueryAddressBook(context.Background(), "/book/", &AddressBookQuery{})
+	if err != nil {
+		t.Fatalf("QueryAddressBook: %v", err)
+	}
+	if len(got) != 2 || got[0].Card == nil || got[1].Card != nil || !strings.HasSuffix(string(got[1].Raw), "FN:Bob\r\n") {
+		t.Fatalf("objects = %+v, want a.vcf parsed and b.vcf kept unparsed", got)
+	}
+	query := &AddressBookQuery{
+		DataRequest: AddressDataRequest{Props: []string{vcard.FieldFormattedName}},
+		PropFilters: []PropFilter{{Name: vcard.FieldFormattedName, TextMatches: []TextMatch{{Text: "Ada"}}}},
+	}
+	if kept, err := Filter(query, got); err != nil || len(kept) != 2 {
+		t.Fatalf("Filter = %d objects, %v; want both kept", len(kept), err)
 	}
 }

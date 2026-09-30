@@ -353,23 +353,27 @@ func decodeAddressList(ms *internal.MultiStatus) ([]AddressObject, error) {
 			return nil, err
 		}
 
-		r := bytes.NewReader(addrData.Data)
-		card, err := vcard.NewDecoder(r).Decode()
-		if err != nil {
-			return nil, err
-		}
-
 		addrs = append(addrs, AddressObject{
 			Path:          path,
 			ModTime:       time.Time(getLastMod.LastModified),
 			ContentLength: getContentLength.Length,
 			ETag:          getETag.ETag,
-			Card:          card,
+			Card:          readable(addrData.Data),
 			Raw:           addrData.Data,
 		})
 	}
 
 	return addrs, errors.Join(errs...)
+}
+
+// readable parses an object a server sent among others. One that cannot be
+// parsed is nil, kept by its Raw bytes, so that it fails no one else.
+func readable(raw []byte) vcard.Card {
+	card, err := vcard.NewDecoder(bytes.NewReader(raw)).Decode()
+	if err != nil {
+		return nil
+	}
+	return card
 }
 
 func (c *Client) QueryAddressBook(ctx context.Context, addressBook string, query *AddressBookQuery) ([]AddressObject, error) {
@@ -605,15 +609,11 @@ func (c *Client) SyncCollection(ctx context.Context, path string, query *SyncQue
 			ETag:    getETag.ETag,
 		}
 
-		// Left out when the server sends no address-data; the caller then
-		// fetches it.
+		// Left out when the server sends no address-data; Raw is then nil and
+		// the caller fetches it.
 		var addrData addressDataResp
 		if err := resp.DecodeProp(&addrData); err == nil {
-			card, err := vcard.NewDecoder(bytes.NewReader(addrData.Data)).Decode()
-			if err != nil {
-				return nil, err
-			}
-			o.Card, o.Raw = card, addrData.Data
+			o.Card, o.Raw = readable(addrData.Data), addrData.Data
 		} else if !internal.IsNotFound(err) {
 			return nil, err
 		}
