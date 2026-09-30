@@ -520,6 +520,8 @@ func TestFilterRecurringTimeRange(t *testing.T) {
 	openQuery := query("20060105T000000Z", "20060105T000000Z")
 	openQuery.CompFilter.Comps[0].End = time.Time{}
 	nowruz := newCO("DTSTART:20060321T100000Z\nDURATION:PT1H\nRRULE:RSCALE=PERSIAN;FREQ=YEARLY")
+	badStart := newCO("DTSTART:2006010XT100000Z\nDURATION:PT1H")
+	badEnd := newCO("DTSTART:20060102T100000Z\nDTEND:tomorrow")
 	movedTail := newCO(
 		"DTSTART:20060102T100000Z\nDTEND:20060102T110000Z\nRRULE:FREQ=DAILY;COUNT=5",
 		"RECURRENCE-ID;RANGE=THISANDFUTURE:20060104T100000Z\nDTSTART:20060104T150000Z\nDTEND:20060104T170000Z",
@@ -544,6 +546,8 @@ func TestFilterRecurringTimeRange(t *testing.T) {
 		{"a Solar Hijri rule falls on Nowruz", query("20080320T100000Z", "20080320T110000Z"), nowruz, true},
 		{"a Solar Hijri rule leaves the Gregorian date", query("20080321T100000Z", "20080321T110000Z"), nowruz, false},
 		{"an endless rule runs into a range without end", openQuery, endless, true},
+		{"an event with an unreadable start is kept", query("20060201T000000Z", "20060202T000000Z"), badStart, true},
+		{"an event with an unreadable end is kept", query("20060201T000000Z", "20060202T000000Z"), badEnd, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Filter(tc.query, []CalendarObject{tc.co})

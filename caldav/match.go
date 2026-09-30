@@ -1,12 +1,10 @@
 package caldav
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/alborzmail/go-recur"
 	"github.com/emersion/go-ical"
 	"github.com/emersion/go-webdav/internal"
 )
@@ -48,14 +46,8 @@ func match(filter CompFilter, comp, parent *ical.Component) (bool, error) {
 		return filter.IsNotDefined, nil
 	}
 
-	if !filter.Start.IsZero() || !filter.End.IsZero() {
-		match, err := matchCompTimeRange(filter.Start, filter.End, comp, parent)
-		if err != nil {
-			return false, err
-		}
-		if !match {
-			return false, nil
-		}
+	if (!filter.Start.IsZero() || !filter.End.IsZero()) && !matchCompTimeRange(filter.Start, filter.End, comp, parent) {
+		return false, nil
 	}
 	for _, compFilter := range filter.Comps {
 		match, err := matchCompFilter(compFilter, comp)
@@ -110,11 +102,7 @@ func matchPropFilter(filter PropFilter, comp *ical.Component) (bool, error) {
 
 	var zeroDate time.Time
 	if filter.Start != zeroDate {
-		match, err := matchPropTimeRange(filter.Start, filter.End, field)
-		if err != nil {
-			return false, err
-		}
-		if !match {
+		if !matchPropTimeRange(filter.Start, filter.End, field) {
 			return false, nil
 		}
 	} else if filter.TextMatch != nil {
@@ -124,7 +112,16 @@ func matchPropFilter(filter PropFilter, comp *ical.Component) (bool, error) {
 	return true, nil
 }
 
-func matchCompTimeRange(start, end time.Time, comp, parent *ical.Component) (bool, error) {
+// matchCompTimeRange keeps a component whose times cannot be read here,
+// such as an unknown zone, a malformed date or a rule in a calendar scale
+// not expanded (RFC 7529): it may fall in any range, and one such object
+// must not fail the query for every other one.
+func matchCompTimeRange(start, end time.Time, comp, parent *ical.Component) bool {
+	ok, err := compTimeRange(start, end, comp, parent)
+	return ok || err != nil
+}
+
+func compTimeRange(start, end time.Time, comp, parent *ical.Component) (bool, error) {
 	// See https://datatracker.ietf.org/doc/html/rfc4791#section-9.9
 	// The "start" attribute specifies the inclusive start of the time range,
 	// and the "end" attribute specifies the non-inclusive end of the time range.
@@ -147,7 +144,7 @@ func matchCompTimeRange(start, end time.Time, comp, parent *ical.Component) (boo
 	}
 	series, err := (&ical.Calendar{Component: parent}).Series(uid, time.UTC)
 	if err != nil {
-		return unreadable(err)
+		return false, err
 	}
 	to := end
 	if to.IsZero() {
@@ -157,7 +154,7 @@ func matchCompTimeRange(start, end time.Time, comp, parent *ical.Component) (boo
 	// instance that the section's inclusive bounds let in.
 	instances, err := series.Between(start.Add(-time.Second), to.Add(time.Second))
 	if err != nil {
-		return unreadable(err)
+		return false, err
 	}
 	for inst := range instances {
 		if series.Component(inst) == comp && overlaps(inst.Start, inst.End) {
@@ -165,16 +162,6 @@ func matchCompTimeRange(start, end time.Time, comp, parent *ical.Component) (boo
 		}
 	}
 	return false, nil
-}
-
-// unreadable keeps an object whose rule cannot be expanded here, such as one
-// in a calendar scale not counted (RFC 7529): it may recur into any range,
-// and one such object must not fail the query for every other one.
-func unreadable(err error) (bool, error) {
-	if errors.Is(err, recur.ErrSyntax) || errors.Is(err, recur.ErrScale) {
-		return true, nil
-	}
-	return false, err
 }
 
 // openEnd stands for a time range without end: the first instant past
@@ -249,17 +236,16 @@ func instanceOverlap(start, end time.Time, comp *ical.Component) (func(s, e time
 	return nil, nil
 }
 
-func matchPropTimeRange(start, end time.Time, field *ical.Prop) (bool, error) {
+// matchPropTimeRange keeps a property whose time cannot be read, as
+// matchCompTimeRange does.
+func matchPropTimeRange(start, end time.Time, field *ical.Prop) bool {
 	// See https://datatracker.ietf.org/doc/html/rfc4791#section-9.9
 
 	ptime, err := field.DateTime(start.Location())
 	if err != nil {
-		return false, err
+		return true
 	}
-	if ptime.After(start) && (end.IsZero() || ptime.Before(end)) {
-		return true, nil
-	}
-	return false, nil
+	return ptime.After(start) && (end.IsZero() || ptime.Before(end))
 }
 
 func matchParamFilter(filter ParamFilter, field *ical.Prop) (bool, error) {
