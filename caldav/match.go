@@ -19,12 +19,16 @@ func Filter(query *CalendarQuery, cos []CalendarObject) ([]CalendarObject, error
 
 	var out []CalendarObject
 	for _, co := range cos {
-		ok, err := Match(query.CompFilter, &co)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
+		// An object that could not be parsed may match anything, as one
+		// whose times cannot be read does.
+		if co.Data != nil {
+			ok, err := Match(query.CompFilter, &co)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
 		}
 
 		// TODO properties are not currently filtered even if requested

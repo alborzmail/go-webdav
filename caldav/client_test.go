@@ -144,3 +144,39 @@ END:VCALENDAR&#13;
 		t.Errorf("updated %+v", o)
 	}
 }
+
+func TestQueryCalendarUnreadable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusMultiStatus)
+		io.WriteString(w, `<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+ <D:response><D:href>/cal/a.ics</D:href><D:propstat><D:prop>
+  <C:calendar-data>BEGIN:VCALENDAR&#13;
+VERSION:2.0&#13;
+PRODID:-//t//t//EN&#13;
+END:VCALENDAR&#13;
+</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+ <D:response><D:href>/cal/b.ics</D:href><D:propstat><D:prop>
+  <C:calendar-data>BEGIN:VCALENDAR&#13;
+BEGIN:VEVENT&#13;
+</C:calendar-data></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>
+</D:multistatus>`)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(http.DefaultClient, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := c.QueryCalendar(context.Background(), "/cal/", &CalendarQuery{CompFilter: CompFilter{Name: "VCALENDAR"}})
+	if err != nil {
+		t.Fatalf("QueryCalendar: %v", err)
+	}
+	if len(got) != 2 || got[0].Data == nil || got[1].Data != nil || !strings.HasSuffix(string(got[1].Raw), "BEGIN:VEVENT\r\n") {
+		t.Fatalf("objects = %+v, want a.ics parsed and b.ics kept unparsed", got)
+	}
+	if kept, err := Filter(&CalendarQuery{CompFilter: CompFilter{Name: "VCALENDAR"}}, got); err != nil || len(kept) != 2 {
+		t.Fatalf("Filter = %d objects, %v; want both kept", len(kept), err)
+	}
+}

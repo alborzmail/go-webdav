@@ -438,23 +438,27 @@ func decodeCalendarObjectList(ms *internal.MultiStatus) ([]CalendarObject, error
 			return nil, err
 		}
 
-		r := bytes.NewReader(calData.Data)
-		data, err := ical.NewDecoder(r).Decode()
-		if err != nil {
-			return nil, err
-		}
-
 		addrs = append(addrs, CalendarObject{
 			Path:          path,
 			ModTime:       time.Time(getLastMod.LastModified),
 			ContentLength: getContentLength.Length,
 			ETag:          getETag.ETag,
-			Data:          data,
+			Data:          readable(calData.Data),
 			Raw:           calData.Data,
 		})
 	}
 
 	return addrs, errors.Join(errs...)
+}
+
+// readable parses an object a server sent among others. One that cannot be
+// parsed is nil, kept by its Raw bytes, so that it fails no one else.
+func readable(raw []byte) *ical.Calendar {
+	cal, err := ical.NewDecoder(bytes.NewReader(raw)).Decode()
+	if err != nil {
+		return nil
+	}
+	return cal
 }
 
 func (c *Client) QueryCalendar(ctx context.Context, calendar string, query *CalendarQuery) ([]CalendarObject, error) {
@@ -680,14 +684,10 @@ func (c *Client) SyncCollection(ctx context.Context, path string, query *SyncQue
 		// Many servers return the calendar-data inline in the sync-collection
 		// response (the query already requests it via CompRequest); decode it so
 		// the caller need not follow up with a multiget. When the server omits the
-		// data, Data is left nil and the caller fetches it as before.
+		// data, Raw is left nil and the caller fetches it as before.
 		var calData calendarDataResp
 		if err := resp.DecodeProp(&calData); err == nil {
-			cal, err := ical.NewDecoder(bytes.NewReader(calData.Data)).Decode()
-			if err != nil {
-				return nil, err
-			}
-			o.Data, o.Raw = cal, calData.Data
+			o.Data, o.Raw = readable(calData.Data), calData.Data
 		} else if !internal.IsNotFound(err) {
 			return nil, err
 		}

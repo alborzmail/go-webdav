@@ -181,7 +181,8 @@ type CalendarObject struct {
 	// Raw, when set by a backend, is the object as stored. The server sends
 	// it instead of encoding Data wherever the whole object is asked for, so
 	// that ETag names the bytes a client gets. Data can then be left nil.
-	// The client sets it to the object as the server sent it in a REPORT.
+	// The client sets it to the object as the server sent it in a REPORT,
+	// and leaves Data nil where that cannot be parsed.
 	Raw []byte
 }
 
