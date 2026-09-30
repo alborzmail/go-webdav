@@ -319,6 +319,7 @@ func encodeTextMatch(tm *TextMatch) *textMatch {
 		Text:            tm.Text,
 		NegateCondition: negateCondition(tm.NegateCondition),
 		MatchType:       matchType(tm.MatchType),
+		Collation:       tm.Collation,
 	}
 }
 

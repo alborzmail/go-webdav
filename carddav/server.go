@@ -126,12 +126,16 @@ func decodePropFilter(el *propFilter) (*PropFilter, error) {
 	pf := &PropFilter{Name: el.Name, Test: FilterTest(el.Test)}
 	if el.IsNotDefined != nil {
 		if len(el.TextMatches) > 0 || len(el.Params) > 0 {
-			return nil, fmt.Errorf("carddav: failed to parse prop-filter: if is-not-defined is provided, text-match or param-filter can't be provided")
+			return nil, internal.HTTPErrorf(http.StatusBadRequest, "carddav: failed to parse prop-filter: if is-not-defined is provided, text-match or param-filter can't be provided")
 		}
 		pf.IsNotDefined = true
 	}
 	for _, tm := range el.TextMatches {
-		pf.TextMatches = append(pf.TextMatches, *decodeTextMatch(&tm))
+		txt, err := decodeTextMatch(&tm)
+		if err != nil {
+			return nil, err
+		}
+		pf.TextMatches = append(pf.TextMatches, *txt)
 	}
 	for _, paramEl := range el.Params {
 		param, err := decodeParamFilter(&paramEl)
@@ -147,22 +151,30 @@ func decodeParamFilter(el *paramFilter) (*ParamFilter, error) {
 	pf := &ParamFilter{Name: el.Name}
 	if el.IsNotDefined != nil {
 		if el.TextMatch != nil {
-			return nil, fmt.Errorf("carddav: failed to parse param-filter: if is-not-defined is provided, text-match can't be provided")
+			return nil, internal.HTTPErrorf(http.StatusBadRequest, "carddav: failed to parse param-filter: if is-not-defined is provided, text-match can't be provided")
 		}
 		pf.IsNotDefined = true
 	}
 	if el.TextMatch != nil {
-		pf.TextMatch = decodeTextMatch(el.TextMatch)
+		txt, err := decodeTextMatch(el.TextMatch)
+		if err != nil {
+			return nil, err
+		}
+		pf.TextMatch = txt
 	}
 	return pf, nil
 }
 
-func decodeTextMatch(tm *textMatch) *TextMatch {
+func decodeTextMatch(tm *textMatch) (*TextMatch, error) {
+	if _, known := internal.Collate(tm.Collation); tm.Collation != "" && !known {
+		return nil, NewPreconditionError(PreconditionSupportedCollation)
+	}
 	return &TextMatch{
 		Text:            tm.Text,
 		NegateCondition: bool(tm.NegateCondition),
 		MatchType:       MatchType(tm.MatchType),
-	}
+		Collation:       tm.Collation,
+	}, nil
 }
 
 func decodeAddressDataReq(addressData *addressDataReq) (*AddressDataRequest, error) {
@@ -205,7 +217,7 @@ func (h *Handler) handleQuery(r *http.Request, w http.ResponseWriter, query *add
 	for _, el := range query.Filter.Props {
 		pf, err := decodePropFilter(&el)
 		if err != nil {
-			return &internal.HTTPError{Code: http.StatusBadRequest, Err: err}
+			return err
 		}
 		q.PropFilters = append(q.PropFilters, *pf)
 	}
@@ -924,6 +936,7 @@ const (
 	PreconditionSupportedAddressData PreconditionType = "supported-address-data"
 	PreconditionValidAddressData     PreconditionType = "valid-address-data"
 	PreconditionMaxResourceSize      PreconditionType = "max-resource-size"
+	PreconditionSupportedCollation   PreconditionType = "supported-collation"
 )
 
 func NewPreconditionError(err PreconditionType) error {

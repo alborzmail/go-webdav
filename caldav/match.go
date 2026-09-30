@@ -2,11 +2,13 @@ package caldav
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/alborzmail/go-recur"
 	"github.com/emersion/go-ical"
+	"github.com/emersion/go-webdav/internal"
 )
 
 // Filter returns the filtered list of calendar objects matching the provided query.
@@ -100,8 +102,9 @@ func matchPropFilter(filter PropFilter, comp *ical.Component) (bool, error) {
 	}
 
 	for _, paramFilter := range filter.ParamFilter {
-		if !matchParamFilter(paramFilter, field) {
-			return false, nil
+		match, err := matchParamFilter(paramFilter, field)
+		if err != nil || !match {
+			return false, err
 		}
 	}
 
@@ -115,10 +118,7 @@ func matchPropFilter(filter PropFilter, comp *ical.Component) (bool, error) {
 			return false, nil
 		}
 	} else if filter.TextMatch != nil {
-		if !matchTextMatch(*filter.TextMatch, field.Value) {
-			return false, nil
-		}
-		return true, nil
+		return matchTextMatch(*filter.TextMatch, field.Value)
 	}
 	// empty prop-filter, property exists
 	return true, nil
@@ -262,25 +262,32 @@ func matchPropTimeRange(start, end time.Time, field *ical.Prop) (bool, error) {
 	return false, nil
 }
 
-func matchParamFilter(filter ParamFilter, field *ical.Prop) bool {
+func matchParamFilter(filter ParamFilter, field *ical.Prop) (bool, error) {
 	// TODO there can be multiple values
 	value := field.Params.Get(filter.Name)
 	if value == "" {
-		return filter.IsNotDefined
+		return filter.IsNotDefined, nil
 	} else if filter.IsNotDefined {
-		return false
+		return false, nil
 	}
 	if filter.TextMatch != nil {
 		return matchTextMatch(*filter.TextMatch, value)
 	}
-	return true
+	return true, nil
 }
 
-func matchTextMatch(txt TextMatch, value string) bool {
-	// TODO: handle text-match collation attribute
-	match := strings.Contains(value, txt.Text)
+func matchTextMatch(txt TextMatch, value string) (bool, error) {
+	collation := txt.Collation
+	if collation == "" {
+		collation = CollationASCIICasemap
+	}
+	collate, known := internal.Collate(collation)
+	if !known {
+		return false, fmt.Errorf("unsupported collation %q", collation)
+	}
+	match := strings.Contains(collate(value), collate(txt.Text))
 	if txt.NegateCondition {
 		match = !match
 	}
-	return match
+	return match, nil
 }

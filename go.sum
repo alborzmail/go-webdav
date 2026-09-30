@@ -4,3 +4,5 @@ github.com/alborzmail/go-recur v0.0.0-20260929133629-dcb73b0bbb94 h1:uPGlV/quYC6
 github.com/alborzmail/go-recur v0.0.0-20260929133629-dcb73b0bbb94/go.mod h1:ebvBQ1HoUkMOmk93waXUZwZjG5NNp2LF6GAjN9TaYT4=
 github.com/emersion/go-vcard v0.0.0-20241024213814-c9703dde27ff h1:4N8wnS3f1hNHSmFD5zgFkWCyA4L1kCDkImPAtK7D6tg=
 github.com/emersion/go-vcard v0.0.0-20241024213814-c9703dde27ff/go.mod h1:HMJKR5wlh/ziNp+sHEDV2ltblO4JD2+IdDOWtGcQBTM=
+golang.org/x/text v0.42.0 h1:JbOZXgfeCPU9gacVtYliJqOhD+zhrEqK4LfdpmlUZqI=
+golang.org/x/text v0.42.0/go.mod h1:ojzP1Z+2QtioaF8DTtO8K5q7JWVVYwZKenzujK0Zd0E=

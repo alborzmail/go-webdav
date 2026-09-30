@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/emersion/go-vcard"
+	"github.com/emersion/go-webdav/internal"
 )
 
 func filterProperties(req AddressDataRequest, ao AddressObject) AddressObject {
@@ -146,23 +147,32 @@ func matchPropFilter(prop PropFilter, ao *AddressObject) (bool, error) {
 }
 
 func matchTextMatch(txt TextMatch, field *vcard.Field) (bool, error) {
-	// TODO: handle text-match collation attribute
+	collation := txt.Collation
+	if collation == "" {
+		collation = CollationUnicodeCasemap
+	}
+	collate, known := internal.Collate(collation)
+	if !known {
+		return false, fmt.Errorf("unsupported collation %q", collation)
+	}
+	value, text := collate(field.Value), collate(txt.Text)
+
 	var ok bool
 	switch txt.MatchType {
 	default:
 		return false, fmt.Errorf("unknown textmatch type %q", txt.MatchType)
 
 	case MatchEquals:
-		ok = txt.Text == field.Value
+		ok = text == value
 
 	case MatchContains, "":
-		ok = strings.Contains(field.Value, txt.Text)
+		ok = strings.Contains(value, text)
 
 	case MatchStartsWith:
-		ok = strings.HasPrefix(field.Value, txt.Text)
+		ok = strings.HasPrefix(value, text)
 
 	case MatchEndsWith:
-		ok = strings.HasSuffix(field.Value, txt.Text)
+		ok = strings.HasSuffix(value, text)
 	}
 
 	if txt.NegateCondition {

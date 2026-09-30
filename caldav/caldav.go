@@ -148,7 +148,16 @@ type PropFilter struct {
 type TextMatch struct {
 	Text            string
 	NegateCondition bool
+	Collation       string // defaults to CollationASCIICasemap
 }
+
+// Collations a server supports, the first two as RFC 4791 section 7.5.1
+// requires.
+const (
+	CollationOctet          = internal.CollationOctet
+	CollationASCIICasemap   = internal.CollationASCIICasemap
+	CollationUnicodeCasemap = internal.CollationUnicodeCasemap
+)
 
 type CalendarQuery struct {
 	CompRequest CalendarCompRequest

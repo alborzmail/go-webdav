@@ -103,6 +103,7 @@ type TextMatch struct {
 	Text            string
 	NegateCondition bool
 	MatchType       MatchType // defaults to MatchContains
+	Collation       string    // defaults to CollationUnicodeCasemap
 }
 
 type FilterTest string
@@ -119,6 +120,13 @@ const (
 	MatchContains   MatchType = "contains"
 	MatchStartsWith MatchType = "starts-with"
 	MatchEndsWith   MatchType = "ends-with"
+)
+
+// Collations a server must support (RFC 6352 section 8.3).
+const (
+	CollationOctet          = internal.CollationOctet
+	CollationASCIICasemap   = internal.CollationASCIICasemap
+	CollationUnicodeCasemap = internal.CollationUnicodeCasemap
 )
 
 type AddressBookMultiGet struct {

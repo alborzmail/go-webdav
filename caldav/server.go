@@ -180,9 +180,24 @@ func decodeParamFilter(el *paramFilter) (*ParamFilter, error) {
 		pf.IsNotDefined = true
 	}
 	if el.TextMatch != nil {
-		pf.TextMatch = &TextMatch{Text: el.TextMatch.Text}
+		txt, err := decodeTextMatch(el.TextMatch)
+		if err != nil {
+			return nil, err
+		}
+		pf.TextMatch = txt
 	}
 	return pf, nil
+}
+
+func decodeTextMatch(tm *textMatch) (*TextMatch, error) {
+	if _, known := internal.Collate(tm.Collation); tm.Collation != "" && !known {
+		return nil, NewPreconditionError(PreconditionSupportedCollation)
+	}
+	return &TextMatch{
+		Text:            tm.Text,
+		NegateCondition: bool(tm.NegateCondition),
+		Collation:       tm.Collation,
+	}, nil
 }
 
 func decodePropFilter(el *propFilter) (*PropFilter, error) {
@@ -194,7 +209,11 @@ func decodePropFilter(el *propFilter) (*PropFilter, error) {
 		pf.IsNotDefined = true
 	}
 	if el.TextMatch != nil {
-		pf.TextMatch = &TextMatch{Text: el.TextMatch.Text}
+		txt, err := decodeTextMatch(el.TextMatch)
+		if err != nil {
+			return nil, err
+		}
+		pf.TextMatch = txt
 	}
 	if el.TimeRange != nil {
 		pf.Start = time.Time(el.TimeRange.Start)
@@ -1078,6 +1097,7 @@ const (
 	PreconditionMaxDateTime                  PreconditionType = "max-date-time"
 	PreconditionMaxInstances                 PreconditionType = "max-instances"
 	PreconditionMaxAttendeesPerInstance      PreconditionType = "max-attendees-per-instance"
+	PreconditionSupportedCollation           PreconditionType = "supported-collation"
 )
 
 func NewPreconditionError(err PreconditionType) error {
