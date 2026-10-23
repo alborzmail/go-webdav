@@ -14,6 +14,7 @@ import (
 	"github.com/emersion/go-vcard"
 	"github.com/emersion/go-webdav"
 	"github.com/emersion/go-webdav/internal"
+	"github.com/emersion/go-webdav/internal/conditional"
 )
 
 type PutAddressObjectOptions struct {
@@ -56,6 +57,16 @@ type Backend interface {
 // step. Without it the server compares the ETag itself, then deletes.
 type ConditionalDeleteBackend interface {
 	DeleteAddressObjectIfMatch(ctx context.Context, path string, ifMatch webdav.ConditionalMatch) error
+}
+
+// ConditionalDeleteOptionsBackend can atomically check both ETag predicates
+// and delete an object. Implementations must evaluate If-Match first (strong
+// comparison), then If-None-Match (weak comparison), returning HTTP 412 on a
+// failed condition. Wildcards test existence even when an ETag is unavailable.
+// This interface takes precedence over ConditionalDeleteBackend. Without it,
+// requests containing If-None-Match use a non-atomic read/check/delete fallback.
+type ConditionalDeleteOptionsBackend interface {
+	DeleteAddressObjectWithOptions(ctx context.Context, path string, opts *webdav.RemoveAllOptions) error
 }
 
 // MultiGetBackend is an optional interface a Backend can implement to fetch
@@ -392,6 +403,13 @@ func (b *backend) HeadGet(w http.ResponseWriter, r *http.Request) error {
 	}
 	if !ao.ModTime.IsZero() {
 		w.Header().Set("Last-Modified", ao.ModTime.UTC().Format(http.TimeFormat))
+	}
+
+	if notModified, err := conditional.Check(r, ao.ETag); err != nil {
+		return err
+	} else if notModified {
+		w.WriteHeader(http.StatusNotModified)
+		return nil
 	}
 
 	if r.Method == http.MethodHead {
@@ -860,12 +878,18 @@ func (b *backend) Delete(r *http.Request) error {
 	case resourceTypeAddressBook:
 		return b.Backend.DeleteAddressBook(r.Context(), r.URL.Path)
 	case resourceTypeAddressObject:
-		ifMatch := webdav.ConditionalMatch(r.Header.Get("If-Match"))
-		if !ifMatch.IsSet() {
+		opts := &webdav.RemoveAllOptions{
+			IfMatch:     webdav.ConditionalMatch(r.Header.Get("If-Match")),
+			IfNoneMatch: webdav.ConditionalMatch(r.Header.Get("If-None-Match")),
+		}
+		if !opts.IfMatch.IsSet() && !opts.IfNoneMatch.IsSet() {
 			return b.Backend.DeleteAddressObject(r.Context(), r.URL.Path)
 		}
-		if cb, ok := b.Backend.(ConditionalDeleteBackend); ok {
-			return cb.DeleteAddressObjectIfMatch(r.Context(), r.URL.Path, ifMatch)
+		if cb, ok := b.Backend.(ConditionalDeleteOptionsBackend); ok {
+			return cb.DeleteAddressObjectWithOptions(r.Context(), r.URL.Path, opts)
+		}
+		if cb, ok := b.Backend.(ConditionalDeleteBackend); ok && !opts.IfNoneMatch.IsSet() {
+			return cb.DeleteAddressObjectIfMatch(r.Context(), r.URL.Path, opts.IfMatch)
 		}
 
 		var dataReq AddressDataRequest
@@ -873,10 +897,8 @@ func (b *backend) Delete(r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		if _, ok, err := ifMatch.MatchETag(ao.ETag); err != nil {
-			return &internal.HTTPError{http.StatusBadRequest, err}
-		} else if !ok && !ifMatch.IsWildcard() {
-			return internal.HTTPErrorf(http.StatusPreconditionFailed, "carddav: If-Match condition failed")
+		if _, err := conditional.Check(r, ao.ETag); err != nil {
+			return err
 		}
 		return b.Backend.DeleteAddressObject(r.Context(), r.URL.Path)
 	}
