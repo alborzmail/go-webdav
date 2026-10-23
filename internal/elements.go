@@ -433,10 +433,16 @@ func (etag *ETag) UnmarshalText(b []byte) error {
 		return nil
 	}
 
-	var err error
-	s, err = strconv.Unquote(s)
-	if err != nil {
-		return fmt.Errorf("webdav: failed to unquote ETag: %v", err)
+	if len(s) < 2 || s[len(s)-1] != '"' {
+		return fmt.Errorf("webdav: unterminated ETag")
+	}
+	s = s[1 : len(s)-1]
+	// An opaque-tag is not a quoted-string: backslashes are literal octets
+	// (RFC 9110 section 8.8.3), so Go string unquoting changes its identity.
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] == '"' || s[i] == 0x7f {
+			return fmt.Errorf("webdav: invalid ETag character")
+		}
 	}
 	*etag = ETag(s)
 	return nil
@@ -451,7 +457,7 @@ func (etag ETag) String() string {
 	if IsEntityTag(string(etag)) {
 		return string(etag)
 	}
-	return fmt.Sprintf("%q", string(etag))
+	return `"` + string(etag) + `"`
 }
 
 // IsEntityTag reports whether s is an entity-tag as HTTP writes it, rather

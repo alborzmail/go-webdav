@@ -5,6 +5,7 @@ package webdav
 
 import (
 	"encoding/xml"
+	"errors"
 	"strings"
 	"time"
 
@@ -83,7 +84,8 @@ func (val ConditionalMatch) ETag() (string, error) {
 //     Callers should check for a non-nil error to ensure the match result is valid.
 //
 // The function returns early if no ETags are set (isSet is false) or if a wildcard (*) is used,
-// in which case all ETags match. For multiple ETags, it checks each one until a match is found or all are checked.
+// in which case all ETags match. For multiple ETags, it validates the whole
+// list and reports whether any tag matches.
 //
 // etag may be a bare opaque-tag or an entity-tag. The comparison is the
 // strong one If-Match asks for: a weak ETag on either side never matches
@@ -114,23 +116,47 @@ func (val ConditionalMatch) matchETag(etag string, weak bool) (isSet bool, match
 	if err := have.UnmarshalText([]byte(etag)); err != nil {
 		return true, false, err
 	}
-	quoted_etags := strings.Split(string(val), ",")
+	quoted_etags, err := splitETagList(string(val))
+	if err != nil {
+		return true, false, err
+	}
+	matched := false
 	for _, quoted_etag := range quoted_etags {
 		quoted_etag = strings.TrimSpace(quoted_etag)
-		if strings.HasPrefix(quoted_etag, "W/") {
-			if !weak {
-				continue
-			}
-			quoted_etag = strings.TrimPrefix(quoted_etag, "W/")
+		if quoted_etag == "" {
+			continue
 		}
+		quoted_etag, tagWeak := strings.CutPrefix(quoted_etag, "W/")
 		var e internal.ETag
 		if err := e.UnmarshalText([]byte(quoted_etag)); err != nil {
 			// opinionated returning `false` on match so caller
 			// should definitely check for non-nil `err`
 			return true, false, err
-		} else if e == have {
-			return true, true, nil
+		} else if e == have && (weak || !tagWeak) {
+			matched = true
 		}
 	}
-	return true, false, nil
+	return true, matched, nil
+}
+
+// Commas delimit a list only outside the entity-tag's quotes. A backslash
+// cannot escape a quote in an opaque-tag (RFC 9110 section 8.8.3).
+func splitETagList(s string) ([]string, error) {
+	var tags []string
+	start, quoted := 0, false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '"':
+			quoted = !quoted
+		case ',':
+			if !quoted {
+				tags = append(tags, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	if quoted {
+		return nil, errors.New("webdav: unterminated ETag")
+	}
+	return append(tags, s[start:]), nil
 }

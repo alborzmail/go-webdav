@@ -128,6 +128,19 @@ func TestETag_UnmarshalText(t *testing.T) {
 	}
 }
 
+func TestETagLiteralBackslash(t *testing.T) {
+	for _, opaque := range []string{`a\b`, `a\\b`, `a\`, `a,b`} {
+		quoted := `"` + opaque + `"`
+		var got ETag
+		if err := got.UnmarshalText([]byte(quoted)); err != nil || string(got) != opaque {
+			t.Errorf("decode %q = %q, %v; want literal %q", quoted, got, err, opaque)
+		}
+		if encoded := ETag(opaque).String(); encoded != quoted {
+			t.Errorf("encode %q = %q, want %q", opaque, encoded, quoted)
+		}
+	}
+}
+
 func TestETag_String(t *testing.T) {
 	tests := []struct {
 		name string

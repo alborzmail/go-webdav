@@ -37,6 +37,17 @@ func TestObjectETagConditions(t *testing.T) {
 			readStatus, deleteStatus         int
 		}{
 			{"unconditional", "1", "", "", 200, 204},
+			{"comma none", "a,b", "", `"a,b"`, 304, 412},
+			{"comma list none", "a,b", "", `"other", "a,b"`, 304, 412},
+			{"weak comma none", "a,b", "", `W/"a,b"`, 304, 412},
+			{"weak comma list none", "a,b", "", `"other", W/"a,b"`, 304, 412},
+			{"weak comma resource none", `W/"a,b"`, "", `"a,b"`, 304, 412},
+			{"comma match", "a,b", `"a,b"`, "", 200, 204},
+			{"comma list match", "a,b", `"other", "a,b"`, "", 200, 204},
+			{"weak comma match fails", "a,b", `W/"a,b"`, "", 412, 412},
+			{"weak comma resource match fails", `W/"a,b"`, `"a,b"`, "", 412, 412},
+			{"backslash none", `a\b`, "", `"a\b"`, 304, 412},
+			{"backslash end match", `a\`, `"a\", "other"`, "", 200, 204},
 			{"match none", "1", "", `"1"`, 304, 412},
 			{"weak none", "1", "", `W/"1"`, 304, 412},
 			{"weak resource", `W/"1"`, "", `"1"`, 304, 412},
